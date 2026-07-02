@@ -193,31 +193,6 @@ function renderAccessPanel() {
         <strong>${protectedCount}</strong>
       </div>
     </div>
-    ${renderProtectedRanges(info.visibleSheets || [])}
-    <p class="access-note">Аркуші можуть бути приховані через правила апки або через заборону редагування в Google Sheets.</p>
-  `;
-}
-
-function renderProtectedRanges(sheets) {
-  const sheetsWithRanges = sheets.filter((sheet) => (sheet.protectedRanges || []).length);
-  if (!sheetsWithRanges.length) {
-    return `<p class="access-note">Для видимих аркушів Google не повернув protected ranges.</p>`;
-  }
-
-  return `
-    <div class="protected-list">
-      ${sheetsWithRanges.map((sheet) => `
-        <section>
-          <h3>${escapeHtml(sheet.title)}</h3>
-          ${(sheet.protectedRanges || []).map((range) => `
-            <div class="protected-range">
-              <span>${escapeHtml(range.description || `Protected range ${range.id}`)}</span>
-              <strong>${range.warningOnly ? "Попередження" : (range.requestingUserCanEdit ? "Можна редагувати" : "Заборонено")}</strong>
-            </div>
-          `).join("")}
-        </section>
-      `).join("")}
-    </div>
   `;
 }
 
