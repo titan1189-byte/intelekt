@@ -1014,6 +1014,16 @@ function sendError(response, error, fallbackCode = 500) {
     return;
   }
 
+  const googleStatus = error.code || error.response?.status;
+  const message = String(error.message || "");
+  if ((googleStatus === 401 || googleStatus === 403) && /insufficient permission/i.test(message)) {
+    sendJson(response, 401, {
+      error: "Потрібна повторна авторизація Google з новими дозволами.",
+      authUrl: "/reauth"
+    });
+    return;
+  }
+
   sendJson(response, fallbackCode, { error: error.message || "Помилка сервера." });
 }
 
@@ -1042,13 +1052,30 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (url.pathname === "/logout") {
-    const { sessionId, store } = currentSession(request);
+    const { sessionId, session, store } = currentSession(request);
     if (sessionId) {
       delete store.sessions[sessionId];
+      if ((url.searchParams.get("clear") === "1" || url.searchParams.get("full") === "1") && session?.userId) {
+        delete store.users[session.userId];
+      }
       writeAuthStore(store);
     }
     clearSessionCookie(response);
     response.writeHead(302, { Location: "/" });
+    response.end();
+    return;
+  }
+
+  if (url.pathname === "/reauth") {
+    const { sessionId, session, store } = currentSession(request);
+    if (sessionId) {
+      delete store.sessions[sessionId];
+      if (session?.userId) delete store.users[session.userId];
+      writeAuthStore(store);
+    }
+    clearSessionCookie(response);
+    const returnTo = normalizeReturnTo(url.searchParams.get("returnTo") || request.headers.referer || "/", request);
+    response.writeHead(302, { Location: `/auth/google?returnTo=${encodeURIComponent(returnTo)}` });
     response.end();
     return;
   }
