@@ -1,0 +1,15 @@
+{
+  "name": "inventory-status-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local app for parsing inventory rows from Google Sheets and updating item statuses.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/script.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "googleapis": "^148.0.0"
+  }
+}

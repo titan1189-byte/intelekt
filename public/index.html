@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Облік майна</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css?v=20260702-no-position-shell">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Google Sheets</p>
+        <h1>Облік майна</h1>
+      </div>
+      <div class="header-actions">
+        <label class="search-box">
+          <span class="sr-only">Пошук</span>
+          <input id="search-input" type="search" placeholder="Пошук: назва, заводський номер, примітка">
+        </label>
+        <button id="refresh-button" class="icon-button" type="button" title="Оновити" aria-label="Оновити">
+          <span aria-hidden="true">↻</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="sync-panel">
+      <div>
+        <strong id="sheet-title">Підключення...</strong>
+        <span id="sync-status">Очікуємо відповідь таблиці</span>
+      </div>
+      <a id="auth-link" class="auth-link" href="/auth/google" hidden>Увійти через Google</a>
+    </section>
+
+    <nav id="sheet-tabs" class="sheet-tabs" aria-label="Аркуші таблиці"></nav>
+    <nav id="status-tabs" class="status-tabs" aria-label="Статуси майна"></nav>
+    <section id="stats-grid" class="stats-grid" aria-label="Підсумки"></section>
+
+    <section class="inventory-shell">
+      <header class="inventory-head">
+        <div>
+          <h2>Позиції</h2>
+          <p id="result-count">0 записів</p>
+        </div>
+      </header>
+      <div id="items-body" class="inventory-board"></div>
+      <div id="empty-state" class="empty-state" hidden>За поточним фільтром записів немає.</div>
+    </section>
+  </main>
+
+  <script src="/script.js?v=20260702-no-position-shell"></script>
+</body>
+</html>
