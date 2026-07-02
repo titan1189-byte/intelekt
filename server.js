@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { URL } = require("url");
 const { google } = require("googleapis");
 require("dotenv").config();
@@ -9,8 +10,17 @@ const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CREDENTIALS_PATH = path.join(__dirname, process.env.GOOGLE_CREDENTIALS_FILE || "credentials.json");
-const TOKEN_PATH = path.join(__dirname, process.env.GOOGLE_TOKEN_FILE || "token.json");
-const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+const DATA_DIR = path.join(__dirname, process.env.DATA_DIR || ".data");
+const AUTH_STORE_PATH = path.join(DATA_DIR, process.env.AUTH_STORE_FILE || "auth-store.json");
+const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || "inventory_session";
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 168) * 60 * 60 * 1000;
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  "https://www.googleapis.com/auth/spreadsheets"
+];
 
 const SHEET_RANGE = process.env.GOOGLE_SHEET_RANGE || "A1:I1000";
 const STATUS_COLUMN_INDEX = 5;
@@ -38,7 +48,104 @@ function readJson(filePath) {
 }
 
 function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function emptyAuthStore() {
+  return {
+    users: {},
+    sessions: {},
+    pendingStates: {}
+  };
+}
+
+function readAuthStore() {
+  if (!fs.existsSync(AUTH_STORE_PATH)) return emptyAuthStore();
+  return { ...emptyAuthStore(), ...readJson(AUTH_STORE_PATH) };
+}
+
+function writeAuthStore(store) {
+  writeJson(AUTH_STORE_PATH, store);
+}
+
+function randomToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function parseCookies(request) {
+  return String(request.headers.cookie || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((cookies, part) => {
+      const index = part.indexOf("=");
+      if (index === -1) return cookies;
+      cookies[part.slice(0, index)] = decodeURIComponent(part.slice(index + 1));
+      return cookies;
+    }, {});
+}
+
+function cookieOptions(request) {
+  const isHttps = request.headers["x-forwarded-proto"] === "https" || request.socket.encrypted;
+  return [
+    "HttpOnly",
+    "Path=/",
+    "SameSite=Lax",
+    `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
+    isHttps ? "Secure" : ""
+  ].filter(Boolean).join("; ");
+}
+
+function setSessionCookie(response, request, sessionId) {
+  response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; ${cookieOptions(request)}`);
+}
+
+function clearSessionCookie(response) {
+  response.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+}
+
+function cleanupAuthStore(store) {
+  const now = Date.now();
+
+  Object.entries(store.sessions || {}).forEach(([sessionId, session]) => {
+    if (!session?.expiresAt || session.expiresAt <= now) delete store.sessions[sessionId];
+  });
+
+  Object.entries(store.pendingStates || {}).forEach(([state, pending]) => {
+    if (!pending?.expiresAt || pending.expiresAt <= now) delete store.pendingStates[state];
+  });
+}
+
+function currentSession(request) {
+  const cookies = parseCookies(request);
+  const sessionId = cookies[SESSION_COOKIE];
+  if (!sessionId) return { sessionId: "", session: null, store: readAuthStore() };
+
+  const store = readAuthStore();
+  cleanupAuthStore(store);
+  const session = store.sessions[sessionId] || null;
+
+  if (!session || session.expiresAt <= Date.now()) {
+    delete store.sessions[sessionId];
+    writeAuthStore(store);
+    return { sessionId: "", session: null, store };
+  }
+
+  return { sessionId, session, store };
+}
+
+function normalizeReturnTo(value, request) {
+  if (!value) return "/";
+
+  try {
+    const base = `http://${request.headers.host}`;
+    const nextUrl = new URL(value, base);
+    if (nextUrl.host !== request.headers.host) return "/";
+    return `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+  } catch {
+    return "/";
+  }
 }
 
 function oauthClient() {
@@ -96,6 +203,130 @@ async function authClient() {
 async function sheetsClient() {
   const auth = await authClient();
   return google.sheets({ version: "v4", auth });
+}
+
+function createAuthUrl(returnTo = "/") {
+  const state = randomToken();
+  const store = readAuthStore();
+  cleanupAuthStore(store);
+  store.pendingStates[state] = {
+    returnTo,
+    expiresAt: Date.now() + OAUTH_STATE_TTL_MS
+  };
+  writeAuthStore(store);
+
+  return oauthClient().generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: SCOPES,
+    state
+  });
+}
+
+function authRequiredError() {
+  const error = new Error("Потрібна авторизація Google.");
+  error.code = "AUTH_REQUIRED";
+  error.authUrl = "/auth/google";
+  return error;
+}
+
+async function fetchGoogleUser(client) {
+  const oauth2 = google.oauth2({ version: "v2", auth: client });
+  const response = await oauth2.userinfo.get();
+  const user = response.data || {};
+  if (!user.id && !user.email) throw new Error("Google не повернув профіль користувача.");
+
+  return {
+    id: String(user.id || user.email),
+    email: user.email || "",
+    name: user.name || user.email || "Google user",
+    picture: user.picture || ""
+  };
+}
+
+async function createUserSession(request, response, code, state) {
+  const store = readAuthStore();
+  cleanupAuthStore(store);
+
+  const pending = store.pendingStates[state];
+  if (!state || !pending) throw new Error("OAuth сесія застаріла. Спробуйте увійти ще раз.");
+  delete store.pendingStates[state];
+
+  const client = oauthClient();
+  const { tokens } = await client.getToken(code);
+  client.setCredentials(tokens);
+
+  const profile = await fetchGoogleUser(client);
+  const previousUser = store.users[profile.id] || {};
+  const previousTokens = previousUser.tokens || {};
+
+  store.users[profile.id] = {
+    ...profile,
+    tokens: {
+      ...previousTokens,
+      ...tokens,
+      refresh_token: tokens.refresh_token || previousTokens.refresh_token
+    },
+    updatedAt: new Date().toISOString()
+  };
+
+  const sessionId = randomToken();
+  store.sessions[sessionId] = {
+    userId: profile.id,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS
+  };
+
+  writeAuthStore(store);
+  setSessionCookie(response, request, sessionId);
+
+  return pending.returnTo || "/";
+}
+
+function authUrl() {
+  return createAuthUrl("/");
+}
+
+async function authClient(request) {
+  const { session, store } = currentSession(request);
+  if (!session?.userId) throw authRequiredError();
+
+  const user = store.users[session.userId];
+  const token = user?.tokens;
+  if (!token) throw authRequiredError();
+
+  const client = oauthClient();
+  client.setCredentials(token);
+
+  if (!token.expiry_date || token.expiry_date > Date.now()) return client;
+
+  if (!token.refresh_token) throw authRequiredError();
+
+  const refreshed = await client.refreshAccessToken();
+  client.setCredentials(refreshed.credentials);
+  user.tokens = { ...token, ...refreshed.credentials, refresh_token: token.refresh_token };
+  user.updatedAt = new Date().toISOString();
+  writeAuthStore(store);
+
+  return client;
+}
+
+async function sheetsClient(request) {
+  const auth = await authClient(request);
+  return google.sheets({ version: "v4", auth });
+}
+
+function currentUser(request) {
+  const { session, store } = currentSession(request);
+  if (!session?.userId) return null;
+  const user = store.users[session.userId];
+  if (!user) return null;
+
+  return {
+    email: user.email,
+    name: user.name,
+    picture: user.picture
+  };
 }
 
 function quoteSheetName(name) {
@@ -396,13 +627,13 @@ function parseInventory(rows) {
   return items;
 }
 
-async function listSheets() {
-  const sheets = await sheetsClient();
+async function listSheets(request) {
+  const sheets = await sheetsClient(request);
   return getSpreadsheetMeta(sheets);
 }
 
-async function readInventory(requestedSheetId) {
-  const sheets = await sheetsClient();
+async function readInventory(request, requestedSheetId) {
+  const sheets = await sheetsClient(request);
   const meta = await getSpreadsheetMeta(sheets);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -429,10 +660,10 @@ async function readInventory(requestedSheetId) {
   };
 }
 
-async function updateStatus(rowNumber, statusTarget, requestedSheetId) {
+async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) {
   if (!Number.isInteger(rowNumber) || rowNumber < 1) throw new Error("Некоректний номер рядка.");
 
-  const sheets = await sheetsClient();
+  const sheets = await sheetsClient(request);
   const meta = await getSpreadsheetMeta(sheets);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -537,7 +768,7 @@ async function updateStatus(rowNumber, statusTarget, requestedSheetId) {
   };
 }
 
-async function updateEditableFields(rowNumber, fields, requestedSheetId) {
+async function updateEditableFields(request, rowNumber, fields, requestedSheetId) {
   if (!Number.isInteger(rowNumber) || rowNumber < 1) throw new Error("Некоректний номер рядка.");
   if (!fields || typeof fields !== "object") throw new Error("Немає полів для оновлення.");
 
@@ -552,7 +783,7 @@ async function updateEditableFields(rowNumber, fields, requestedSheetId) {
 
   if (!updates.length) throw new Error("Немає дозволених полів для оновлення.");
 
-  const sheets = await sheetsClient();
+  const sheets = await sheetsClient(request);
   const meta = await getSpreadsheetMeta(sheets);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -647,7 +878,8 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
   if (url.pathname === "/auth/google") {
-    response.writeHead(302, { Location: authUrl() });
+    const returnTo = normalizeReturnTo(url.searchParams.get("returnTo") || request.headers.referer || "/", request);
+    response.writeHead(302, { Location: createAuthUrl(returnTo) });
     response.end();
     return;
   }
@@ -655,11 +887,10 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === "/oauth2callback") {
     try {
       const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
       if (!code) throw new Error("Google не повернув authorization code.");
-      const client = oauthClient();
-      const { tokens } = await client.getToken(code);
-      writeJson(TOKEN_PATH, tokens);
-      response.writeHead(302, { Location: "/" });
+      const returnTo = await createUserSession(request, response, code, state);
+      response.writeHead(302, { Location: returnTo });
       response.end();
     } catch (error) {
       sendError(response, error);
@@ -667,9 +898,26 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/logout") {
+    const { sessionId, store } = currentSession(request);
+    if (sessionId) {
+      delete store.sessions[sessionId];
+      writeAuthStore(store);
+    }
+    clearSessionCookie(response);
+    response.writeHead(302, { Location: "/" });
+    response.end();
+    return;
+  }
+
+  if (url.pathname === "/api/me" && request.method === "GET") {
+    sendJson(response, 200, { user: currentUser(request) });
+    return;
+  }
+
   if (url.pathname === "/api/sheets" && request.method === "GET") {
     try {
-      sendJson(response, 200, await listSheets());
+      sendJson(response, 200, await listSheets(request));
     } catch (error) {
       sendError(response, error);
     }
@@ -678,7 +926,7 @@ const server = http.createServer(async (request, response) => {
 
   if (url.pathname === "/api/items" && request.method === "GET") {
     try {
-      sendJson(response, 200, await readInventory(url.searchParams.get("sheetId")));
+      sendJson(response, 200, await readInventory(request, url.searchParams.get("sheetId")));
     } catch (error) {
       sendError(response, error);
     }
@@ -688,7 +936,7 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === "/api/status" && request.method === "PATCH") {
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await updateStatus(Number(body.rowNumber), body.status, body.sheetId));
+      sendJson(response, 200, await updateStatus(request, Number(body.rowNumber), body.status, body.sheetId));
     } catch (error) {
       sendError(response, error, 400);
     }
@@ -698,7 +946,7 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === "/api/fields" && request.method === "PATCH") {
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await updateEditableFields(Number(body.rowNumber), body.fields, body.sheetId));
+      sendJson(response, 200, await updateEditableFields(request, Number(body.rowNumber), body.fields, body.sheetId));
     } catch (error) {
       sendError(response, error, 400);
     }
