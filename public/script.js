@@ -2,6 +2,7 @@ const nodes = {
   sheetTitle: document.getElementById("sheet-title"),
   syncStatus: document.getElementById("sync-status"),
   authLink: document.getElementById("auth-link"),
+  accessPanel: document.getElementById("access-panel"),
   searchInput: document.getElementById("search-input"),
   refreshButton: document.getElementById("refresh-button"),
   sheetTabs: document.getElementById("sheet-tabs"),
@@ -19,6 +20,7 @@ const state = {
   items: [],
   statuses: [],
   moveTargets: [],
+  accessInfo: null,
   activeStatus: "all",
   query: "",
   loading: false,
@@ -140,6 +142,71 @@ function renderStats() {
       </article>
     `)
     .join("");
+}
+
+function renderAccessPanel() {
+  const info = state.accessInfo;
+  if (!info || !info.user) {
+    nodes.accessPanel.hidden = true;
+    nodes.accessPanel.innerHTML = "";
+    return;
+  }
+
+  const protectedCount = (info.visibleSheets || []).reduce((count, sheet) => {
+    return count + (sheet.protectedRanges || []).length;
+  }, 0);
+  const appAccessText = info.appAccess?.configured
+    ? `Дозволено аркушів: ${(info.visibleSheets || []).length}`
+    : "Обмеження аркушів в апці не налаштовані";
+  const hiddenText = info.hiddenSheetsCount
+    ? `Приховано аркушів: ${info.hiddenSheetsCount}`
+    : "Прихованих аркушів немає";
+
+  nodes.accessPanel.hidden = false;
+  nodes.accessPanel.innerHTML = `
+    <div class="access-summary">
+      <div>
+        <span>Google акаунт</span>
+        <strong>${escapeHtml(info.user.email || info.user.name)}</strong>
+      </div>
+      <div>
+        <span>Доступ в апці</span>
+        <strong>${escapeHtml(appAccessText)}</strong>
+      </div>
+      <div>
+        <span>Видимість</span>
+        <strong>${escapeHtml(hiddenText)}</strong>
+      </div>
+      <div>
+        <span>Захищені діапазони</span>
+        <strong>${protectedCount}</strong>
+      </div>
+    </div>
+    ${renderProtectedRanges(info.visibleSheets || [])}
+  `;
+}
+
+function renderProtectedRanges(sheets) {
+  const sheetsWithRanges = sheets.filter((sheet) => (sheet.protectedRanges || []).length);
+  if (!sheetsWithRanges.length) {
+    return `<p class="access-note">Для видимих аркушів Google не повернув protected ranges.</p>`;
+  }
+
+  return `
+    <div class="protected-list">
+      ${sheetsWithRanges.map((sheet) => `
+        <section>
+          <h3>${escapeHtml(sheet.title)}</h3>
+          ${(sheet.protectedRanges || []).map((range) => `
+            <div class="protected-range">
+              <span>${escapeHtml(range.description || `Protected range ${range.id}`)}</span>
+              <strong>${range.warningOnly ? "Попередження" : (range.requestingUserCanEdit ? "Можна редагувати" : "Заборонено")}</strong>
+            </div>
+          `).join("")}
+        </section>
+      `).join("")}
+    </div>
+  `;
 }
 
 function statusSelect(item) {
@@ -397,6 +464,7 @@ function render() {
   renderSheetTabs();
   renderStatusTabs();
   renderStats();
+  renderAccessPanel();
   renderRows();
 }
 
@@ -435,6 +503,7 @@ async function loadItems() {
     state.moveTargets = payload.moveTargets || [];
     nodes.sheetTitle.textContent = `${state.spreadsheetTitle} / ${payload.sheetTitle || "Аркуш"}`;
 
+    await loadAccessInfo();
     render();
     setSync(`Синхронізовано ${new Date(payload.updatedAt).toLocaleTimeString("uk-UA", {
       hour: "2-digit",
@@ -447,6 +516,19 @@ async function loadItems() {
   } finally {
     state.loading = false;
     nodes.refreshButton.disabled = false;
+  }
+}
+
+async function loadAccessInfo() {
+  try {
+    const response = await fetch(`/api/access-info?t=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    state.accessInfo = payload;
+  } catch (error) {
+    console.warn(error);
+    state.accessInfo = null;
   }
 }
 

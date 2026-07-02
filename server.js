@@ -413,15 +413,26 @@ function normalizeSheet(sheet) {
   return {
     id: sheet.properties.sheetId,
     title: sheet.properties.title,
-    index: sheet.properties.index
+    index: sheet.properties.index,
+    protectedRanges: (sheet.protectedRanges || []).map((range) => ({
+      id: range.protectedRangeId,
+      description: range.description || "",
+      warningOnly: Boolean(range.warningOnly),
+      requestingUserCanEdit: range.requestingUserCanEdit !== false,
+      users: range.editors?.users || [],
+      groups: range.editors?.groups || [],
+      domainUsersCanEdit: Boolean(range.editors?.domainUsersCanEdit)
+    }))
   };
 }
 
-async function getSpreadsheetMeta(sheets) {
+async function getSpreadsheetMeta(sheets, includeProtectedRanges = false) {
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
   const response = await sheets.spreadsheets.get({
     spreadsheetId,
-    fields: "properties(title),sheets(properties(sheetId,title,index))"
+    fields: includeProtectedRanges
+      ? "properties(title),sheets(properties(sheetId,title,index),protectedRanges(protectedRangeId,description,warningOnly,requestingUserCanEdit,editors(users,groups,domainUsersCanEdit)))"
+      : "properties(title),sheets(properties(sheetId,title,index))"
   });
 
   const sheetList = (response.data.sheets || []).map(normalizeSheet).sort((a, b) => a.index - b.index);
@@ -695,6 +706,28 @@ async function listSheets(request) {
   const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
   ensureSheetAccess(meta);
   return meta;
+}
+
+async function accessInfo(request) {
+  const sheets = await sheetsClient(request);
+  const fullMeta = await getSpreadsheetMeta(sheets, true);
+  const visibleMeta = applySheetAccess(request, fullMeta);
+  const configuredAccess = sheetAccessForUser(request);
+
+  return {
+    user: currentUser(request),
+    spreadsheetTitle: fullMeta.spreadsheetTitle,
+    appAccess: {
+      configured: Boolean(configuredAccess),
+      allowed: configuredAccess
+    },
+    visibleSheets: visibleMeta.sheets.map((sheet) => ({
+      id: sheet.id,
+      title: sheet.title,
+      protectedRanges: sheet.protectedRanges
+    })),
+    hiddenSheetsCount: Math.max(0, fullMeta.sheets.length - visibleMeta.sheets.length)
+  };
 }
 
 async function readInventory(request, requestedSheetId) {
@@ -985,6 +1018,15 @@ const server = http.createServer(async (request, response) => {
 
   if (url.pathname === "/api/me" && request.method === "GET") {
     sendJson(response, 200, { user: currentUser(request) });
+    return;
+  }
+
+  if (url.pathname === "/api/access-info" && request.method === "GET") {
+    try {
+      sendJson(response, 200, await accessInfo(request));
+    } catch (error) {
+      sendError(response, error);
+    }
     return;
   }
 
