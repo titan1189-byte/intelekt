@@ -6,6 +6,19 @@ const { URL } = require("url");
 const { google } = require("googleapis");
 require("dotenv").config();
 
+if (process.env.DISABLE_OUTBOUND_PROXY !== "false") {
+  [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy"
+  ].forEach((name) => {
+    delete process.env[name];
+  });
+}
+
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, "public");
