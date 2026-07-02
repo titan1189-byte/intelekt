@@ -155,6 +155,7 @@ function renderAccessPanel() {
   const protectedCount = (info.visibleSheets || []).reduce((count, sheet) => {
     return count + (sheet.protectedRanges || []).length;
   }, 0);
+  const googleHiddenCount = (info.hiddenSheets || []).filter((sheet) => sheet.reason === "google_protected").length;
   const appAccessText = info.appAccess?.configured
     ? `Дозволено аркушів: ${(info.visibleSheets || []).length}`
     : "Обмеження аркушів в апці не налаштовані";
@@ -176,6 +177,10 @@ function renderAccessPanel() {
       <div>
         <span>Видимість</span>
         <strong>${escapeHtml(hiddenText)}</strong>
+      </div>
+      <div>
+        <span>Google захист</span>
+        <strong>${googleHiddenCount ? `Сховано: ${googleHiddenCount}` : "Не приховує"}</strong>
       </div>
       <div>
         <span>Захищені діапазони</span>

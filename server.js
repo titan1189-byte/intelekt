@@ -389,6 +389,20 @@ function applySheetAccess(request, meta) {
   };
 }
 
+function sheetHiddenReason(request, sheet) {
+  const allowed = sheetAccessForUser(request);
+  const allowedSet = allowed
+    ? new Set(allowed.map((item) => String(item).toLowerCase()))
+    : null;
+  const allowedByApp = !allowedSet
+    || allowedSet.has(String(sheet.id).toLowerCase())
+    || allowedSet.has(String(sheet.title).toLowerCase());
+
+  if (!allowedByApp) return "app";
+  if (sheetEditBlockedByGoogle(sheet)) return "google_protected";
+  return "";
+}
+
 function sheetEditBlockedByGoogle(sheet) {
   if (!HIDE_NON_EDITABLE_SHEETS) return false;
 
@@ -449,7 +463,7 @@ function normalizeSheet(sheet) {
       description: range.description || "",
       range: range.range || null,
       warningOnly: Boolean(range.warningOnly),
-      requestingUserCanEdit: range.requestingUserCanEdit !== false,
+      requestingUserCanEdit: Boolean(range.requestingUserCanEdit),
       users: range.editors?.users || [],
       groups: range.editors?.groups || [],
       domainUsersCanEdit: Boolean(range.editors?.domainUsersCanEdit)
@@ -763,6 +777,13 @@ async function accessInfo(request) {
       title: sheet.title,
       protectedRanges: sheet.protectedRanges
     })),
+    hiddenSheets: fullMeta.sheets
+      .filter((sheet) => !visibleMeta.sheets.some((visible) => String(visible.id) === String(sheet.id)))
+      .map((sheet) => ({
+        id: sheet.id,
+        title: sheet.title,
+        reason: sheetHiddenReason(request, sheet)
+      })),
     hiddenSheetsCount: Math.max(0, fullMeta.sheets.length - visibleMeta.sheets.length)
   };
 }
