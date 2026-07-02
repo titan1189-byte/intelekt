@@ -57,6 +57,22 @@ function setSync(message, isError = false) {
   nodes.syncStatus.dataset.error = isError ? "true" : "false";
 }
 
+async function readJsonResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 120);
+    throw new Error(`API повернув не JSON (${response.status}). ${preview || "Порожня відповідь"}`);
+  }
+
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`API повернув некоректний JSON (${response.status}).`);
+  }
+}
+
 function setActiveSheet(sheetId, shouldPushUrl = true) {
   state.activeSheetId = String(sheetId || "");
   state.activeStatus = "all";
@@ -473,7 +489,7 @@ async function loadItems(allowSheetFallback = true) {
     if (state.activeSheetId) params.set("sheetId", state.activeSheetId);
 
     const response = await fetch(`/api/items?${params.toString()}&t=${Date.now()}`, { cache: "no-store" });
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
 
     if (response.status === 401 && payload.authUrl) {
       handleAuthRequired(payload);
@@ -521,7 +537,7 @@ async function loadItems(allowSheetFallback = true) {
 async function loadAccessInfo() {
   try {
     const response = await fetch(`/api/access-info?t=${Date.now()}`, { cache: "no-store" });
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
 
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     state.accessInfo = payload;
@@ -558,7 +574,7 @@ async function changeStatus(rowNumber, nextStatus, selectNode) {
         status: nextStatus
       })
     });
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
 
     if (response.status === 401 && payload.authUrl) {
       handleAuthRequired(payload);
@@ -606,7 +622,7 @@ async function changeEditableField(rowNumber, field, nextValue, inputNode) {
         }
       })
     });
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
 
     if (response.status === 401 && payload.authUrl) {
       handleAuthRequired(payload);
@@ -638,7 +654,7 @@ async function sendReport() {
         sheetId: state.activeSheetId
       })
     });
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
 
     if (response.status === 401 && payload.authUrl) {
       handleAuthRequired(payload);
