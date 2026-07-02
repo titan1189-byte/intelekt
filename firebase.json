@@ -1,0 +1,49 @@
+{
+  "functions": {
+    "source": ".",
+    "runtime": "nodejs20",
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      ".data",
+      ".env",
+      ".env.*",
+      "!.env.example",
+      "!.env.firebase.example",
+      "credentials*.json",
+      "token*.json"
+    ]
+  },
+  "hosting": {
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "function": "app"
+      },
+      {
+        "source": "/auth/google",
+        "function": "app"
+      },
+      {
+        "source": "/oauth2callback",
+        "function": "app"
+      },
+      {
+        "source": "/logout",
+        "function": "app"
+      },
+      {
+        "source": "/reauth",
+        "function": "app"
+      }
+    ]
+  }
+}

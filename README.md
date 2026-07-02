@@ -82,3 +82,29 @@ are removed from the sheet title. If a sheet needs a custom function name, set
 
 If the Apps Script function returns a WhatsApp URL as a string, or as
 `{ "url": "..." }`, the app opens it in a new tab.
+
+## Firebase production
+
+Production is prepared for Firebase Hosting + Cloud Functions. Hosting serves
+`public/`, while `/api/**`, `/auth/google`, `/oauth2callback`, `/logout`, and
+`/reauth` are routed to the `app` Cloud Function.
+
+Setup:
+
+1. Create a Firebase project and enable Firestore.
+2. Copy `.firebaserc.example` to `.firebaserc` and set your Firebase project id,
+   or deploy with `firebase deploy --project your-project-id`.
+3. Copy `.env.firebase.example` to `.env.your-project-id` and fill values.
+4. In Google Cloud OAuth client, add:
+   `https://your-firebase-project-id.web.app/oauth2callback`
+   to Authorized redirect URIs.
+5. Enable APIs in Google Cloud: Google Sheets API and Google Apps Script API.
+6. Deploy:
+
+```powershell
+npm run deploy
+```
+
+Use `/reauth` after deploy so users grant the production OAuth scopes. In
+production, OAuth sessions and refresh tokens are stored in Firestore instead
+of `.data/auth-store.json`.

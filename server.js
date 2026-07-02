@@ -26,6 +26,8 @@ const CREDENTIALS_PATH = path.join(__dirname, process.env.GOOGLE_CREDENTIALS_FIL
 const DATA_DIR = path.join(__dirname, process.env.DATA_DIR || ".data");
 const AUTH_STORE_PATH = path.join(DATA_DIR, process.env.AUTH_STORE_FILE || "auth-store.json");
 const SHEET_ACCESS_PATH = path.join(DATA_DIR, process.env.SHEET_ACCESS_FILE || "sheet-access.json");
+const AUTH_STORE_BACKEND = process.env.AUTH_STORE_BACKEND || (process.env.K_SERVICE ? "firestore" : "file");
+const FIRESTORE_AUTH_DOC = process.env.FIRESTORE_AUTH_DOC || "runtime/authStore";
 const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || "inventory_session";
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 168) * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -77,12 +79,31 @@ function emptyAuthStore() {
   };
 }
 
-function readAuthStore() {
+function firestoreDb() {
+  if (!firestoreDb.instance) {
+    const admin = require("firebase-admin");
+    if (!admin.apps.length) admin.initializeApp();
+    firestoreDb.instance = admin.firestore();
+  }
+  return firestoreDb.instance;
+}
+
+async function readAuthStore() {
+  if (AUTH_STORE_BACKEND === "firestore") {
+    const snapshot = await firestoreDb().doc(FIRESTORE_AUTH_DOC).get();
+    return { ...emptyAuthStore(), ...(snapshot.exists ? snapshot.data() : {}) };
+  }
+
   if (!fs.existsSync(AUTH_STORE_PATH)) return emptyAuthStore();
   return { ...emptyAuthStore(), ...readJson(AUTH_STORE_PATH) };
 }
 
-function writeAuthStore(store) {
+async function writeAuthStore(store) {
+  if (AUTH_STORE_BACKEND === "firestore") {
+    await firestoreDb().doc(FIRESTORE_AUTH_DOC).set(store);
+    return;
+  }
+
   writeJson(AUTH_STORE_PATH, store);
 }
 
@@ -134,18 +155,18 @@ function cleanupAuthStore(store) {
   });
 }
 
-function currentSession(request) {
+async function currentSession(request) {
   const cookies = parseCookies(request);
   const sessionId = cookies[SESSION_COOKIE];
-  if (!sessionId) return { sessionId: "", session: null, store: readAuthStore() };
+  if (!sessionId) return { sessionId: "", session: null, store: await readAuthStore() };
 
-  const store = readAuthStore();
+  const store = await readAuthStore();
   cleanupAuthStore(store);
   const session = store.sessions[sessionId] || null;
 
   if (!session || session.expiresAt <= Date.now()) {
     delete store.sessions[sessionId];
-    writeAuthStore(store);
+    await writeAuthStore(store);
     return { sessionId: "", session: null, store };
   }
 
@@ -166,6 +187,18 @@ function normalizeReturnTo(value, request) {
 }
 
 function oauthClient() {
+  const envClientId = process.env.GOOGLE_CLIENT_ID;
+  const envClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const envRedirectUri = process.env.GOOGLE_REDIRECT_URI;
+
+  if (envClientId && envClientSecret) {
+    return new google.auth.OAuth2(
+      envClientId,
+      envClientSecret,
+      envRedirectUri || `http://${HOST}:${PORT}/oauth2callback`
+    );
+  }
+
   if (!fs.existsSync(CREDENTIALS_PATH)) {
     throw new Error(`Не знайдено ${path.basename(CREDENTIALS_PATH)}. Покладіть OAuth credentials у папку проєкту.`);
   }
@@ -181,56 +214,15 @@ function oauthClient() {
   return new google.auth.OAuth2(config.client_id, config.client_secret, redirectUri);
 }
 
-function authUrl() {
-  return oauthClient().generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: SCOPES
-  });
-}
-
-async function authClient() {
-  const client = oauthClient();
-
-  if (!fs.existsSync(TOKEN_PATH)) {
-    const error = new Error("Потрібна авторизація Google.");
-    error.code = "AUTH_REQUIRED";
-    error.authUrl = authUrl();
-    throw error;
-  }
-
-  const token = readJson(TOKEN_PATH);
-  client.setCredentials(token);
-
-  if (!token.expiry_date || token.expiry_date > Date.now()) return client;
-
-  if (!token.refresh_token) {
-    const error = new Error("Токен застарів. Авторизуйтесь повторно.");
-    error.code = "AUTH_REQUIRED";
-    error.authUrl = authUrl();
-    throw error;
-  }
-
-  const refreshed = await client.refreshAccessToken();
-  client.setCredentials(refreshed.credentials);
-  writeJson(TOKEN_PATH, { ...token, ...refreshed.credentials });
-  return client;
-}
-
-async function sheetsClient() {
-  const auth = await authClient();
-  return google.sheets({ version: "v4", auth });
-}
-
-function createAuthUrl(returnTo = "/") {
+async function createAuthUrl(returnTo = "/") {
   const state = randomToken();
-  const store = readAuthStore();
+  const store = await readAuthStore();
   cleanupAuthStore(store);
   store.pendingStates[state] = {
     returnTo,
     expiresAt: Date.now() + OAUTH_STATE_TTL_MS
   };
-  writeAuthStore(store);
+  await writeAuthStore(store);
 
   return oauthClient().generateAuthUrl({
     access_type: "offline",
@@ -262,7 +254,7 @@ async function fetchGoogleUser(client) {
 }
 
 async function createUserSession(request, response, code, state) {
-  const store = readAuthStore();
+  const store = await readAuthStore();
   cleanupAuthStore(store);
 
   const pending = store.pendingStates[state];
@@ -294,18 +286,14 @@ async function createUserSession(request, response, code, state) {
     expiresAt: Date.now() + SESSION_TTL_MS
   };
 
-  writeAuthStore(store);
+  await writeAuthStore(store);
   setSessionCookie(response, request, sessionId);
 
   return pending.returnTo || "/";
 }
 
-function authUrl() {
-  return createAuthUrl("/");
-}
-
 async function authClient(request) {
-  const { session, store } = currentSession(request);
+  const { session, store } = await currentSession(request);
   if (!session?.userId) throw authRequiredError();
 
   const user = store.users[session.userId];
@@ -323,7 +311,7 @@ async function authClient(request) {
   client.setCredentials(refreshed.credentials);
   user.tokens = { ...token, ...refreshed.credentials, refresh_token: token.refresh_token };
   user.updatedAt = new Date().toISOString();
-  writeAuthStore(store);
+  await writeAuthStore(store);
 
   return client;
 }
@@ -338,8 +326,8 @@ async function appsScriptClient(request) {
   return google.script({ version: "v1", auth });
 }
 
-function currentUser(request) {
-  const { session, store } = currentSession(request);
+async function currentUser(request) {
+  const { session, store } = await currentSession(request);
   if (!session?.userId) return null;
   const user = store.users[session.userId];
   if (!user) return null;
@@ -352,6 +340,7 @@ function currentUser(request) {
 }
 
 function readSheetAccessRules() {
+  if (process.env.SHEET_ACCESS_JSON) return JSON.parse(process.env.SHEET_ACCESS_JSON);
   if (!fs.existsSync(SHEET_ACCESS_PATH)) return null;
   return readJson(SHEET_ACCESS_PATH);
 }
@@ -362,11 +351,11 @@ function normalizeSheetAccessList(value) {
   return [String(value)];
 }
 
-function sheetAccessForUser(request) {
+async function sheetAccessForUser(request) {
   const rules = readSheetAccessRules();
   if (!rules) return null;
 
-  const user = currentUser(request);
+  const user = await currentUser(request);
   const email = String(user?.email || "").toLowerCase();
   const users = rules.users || {};
   const direct = email ? users[email] : undefined;
@@ -376,8 +365,8 @@ function sheetAccessForUser(request) {
   return normalizeSheetAccessList(direct ?? wildcard ?? fallback) || [];
 }
 
-function applySheetAccess(request, meta) {
-  const allowed = sheetAccessForUser(request);
+async function applySheetAccess(request, meta) {
+  const allowed = await sheetAccessForUser(request);
   const allowedSet = allowed
     ? new Set(allowed.map((item) => String(item).toLowerCase()))
     : null;
@@ -396,8 +385,8 @@ function applySheetAccess(request, meta) {
   };
 }
 
-function sheetHiddenReason(request, sheet) {
-  const allowed = sheetAccessForUser(request);
+async function sheetHiddenReason(request, sheet) {
+  const allowed = await sheetAccessForUser(request);
   const allowedSet = allowed
     ? new Set(allowed.map((item) => String(item).toLowerCase()))
     : null;
@@ -775,7 +764,7 @@ function parseInventory(rows) {
 
 async function listSheets(request) {
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
+  const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta);
   return meta;
 }
@@ -783,11 +772,19 @@ async function listSheets(request) {
 async function accessInfo(request) {
   const sheets = await sheetsClient(request);
   const fullMeta = await getSpreadsheetMeta(sheets, true);
-  const visibleMeta = applySheetAccess(request, fullMeta);
-  const configuredAccess = sheetAccessForUser(request);
+  const visibleMeta = await applySheetAccess(request, fullMeta);
+  const configuredAccess = await sheetAccessForUser(request);
+  const user = await currentUser(request);
+  const hiddenSheets = await Promise.all(fullMeta.sheets
+    .filter((sheet) => !visibleMeta.sheets.some((visible) => String(visible.id) === String(sheet.id)))
+    .map(async (sheet) => ({
+      id: sheet.id,
+      title: sheet.title,
+      reason: await sheetHiddenReason(request, sheet)
+    })));
 
   return {
-    user: currentUser(request),
+    user,
     spreadsheetTitle: fullMeta.spreadsheetTitle,
     appAccess: {
       configured: Boolean(configuredAccess),
@@ -798,20 +795,14 @@ async function accessInfo(request) {
       title: sheet.title,
       protectedRanges: sheet.protectedRanges
     })),
-    hiddenSheets: fullMeta.sheets
-      .filter((sheet) => !visibleMeta.sheets.some((visible) => String(visible.id) === String(sheet.id)))
-      .map((sheet) => ({
-        id: sheet.id,
-        title: sheet.title,
-        reason: sheetHiddenReason(request, sheet)
-      })),
+    hiddenSheets,
     hiddenSheetsCount: Math.max(0, fullMeta.sheets.length - visibleMeta.sheets.length)
   };
 }
 
 async function readInventory(request, requestedSheetId) {
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
+  const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -842,7 +833,7 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
   if (!Number.isInteger(rowNumber) || rowNumber < 1) throw new Error("Некоректний номер рядка.");
 
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
+  const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -963,7 +954,7 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
   if (!updates.length) throw new Error("Немає дозволених полів для оновлення.");
 
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
+  const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -990,7 +981,7 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
 async function sendReport(request, requestedSheetId) {
   const scriptId = requiredEnv("GOOGLE_APPS_SCRIPT_ID");
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
+  const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const functionName = reportFunctionName(selectedSheet.title);
@@ -1110,12 +1101,12 @@ function sendError(response, error, fallbackCode = 500) {
   sendJson(response, fallbackCode, { error: error.message || "Помилка сервера." });
 }
 
-const server = http.createServer(async (request, response) => {
+async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
   if (url.pathname === "/auth/google") {
     const returnTo = normalizeReturnTo(url.searchParams.get("returnTo") || request.headers.referer || "/", request);
-    response.writeHead(302, { Location: createAuthUrl(returnTo) });
+    response.writeHead(302, { Location: await createAuthUrl(returnTo) });
     response.end();
     return;
   }
@@ -1135,13 +1126,13 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (url.pathname === "/logout") {
-    const { sessionId, session, store } = currentSession(request);
+    const { sessionId, session, store } = await currentSession(request);
     if (sessionId) {
       delete store.sessions[sessionId];
       if ((url.searchParams.get("clear") === "1" || url.searchParams.get("full") === "1") && session?.userId) {
         delete store.users[session.userId];
       }
-      writeAuthStore(store);
+      await writeAuthStore(store);
     }
     clearSessionCookie(response);
     response.writeHead(302, { Location: "/" });
@@ -1150,11 +1141,11 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (url.pathname === "/reauth") {
-    const { sessionId, session, store } = currentSession(request);
+    const { sessionId, session, store } = await currentSession(request);
     if (sessionId) {
       delete store.sessions[sessionId];
       if (session?.userId) delete store.users[session.userId];
-      writeAuthStore(store);
+      await writeAuthStore(store);
     }
     clearSessionCookie(response);
     const returnTo = normalizeReturnTo(url.searchParams.get("returnTo") || request.headers.referer || "/", request);
@@ -1164,7 +1155,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (url.pathname === "/api/me" && request.method === "GET") {
-    sendJson(response, 200, { user: currentUser(request) });
+    sendJson(response, 200, { user: await currentUser(request) });
     return;
   }
 
@@ -1231,8 +1222,13 @@ const server = http.createServer(async (request, response) => {
   }
 
   sendJson(response, 404, { error: "Route not found" });
-});
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`Inventory Status App: http://${HOST}:${PORT}`);
-});
+if (require.main === module) {
+  const server = http.createServer(requestHandler);
+  server.listen(PORT, HOST, () => {
+    console.log(`Inventory Status App: http://${HOST}:${PORT}`);
+  });
+}
+
+module.exports = { requestHandler };
