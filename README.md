@@ -64,3 +64,21 @@ Example:
 Use Google user email as the key. Values can be sheet `gid` numbers or sheet
 titles. When `sheet-access.json` exists, users not listed there see no tabs
 unless `default` or `users["*"]` allows them.
+
+## Apps Script report button
+
+The app can run the existing Google Apps Script report functions from the
+active sheet. Set `GOOGLE_APPS_SCRIPT_ID` in `.env` to the Apps Script project
+ID, enable the Google Apps Script API in Google Cloud, then open `/reauth` once
+so the user grants the added `script.scriptapp` scope.
+
+For sheet `2 РУБпАК`, the app calls `надіслатиЗвіт_2РУБпАК` by default. Spaces
+are removed from the sheet title. If a sheet needs a custom function name, set
+`REPORT_FUNCTION_MAP` to a JSON object in `.env`, for example:
+
+```json
+{"2 РУБпАК":"надіслатиЗвіт_2РУБпАК"}
+```
+
+If the Apps Script function returns a WhatsApp URL as a string, or as
+`{ "url": "..." }`, the app opens it in a new tab.

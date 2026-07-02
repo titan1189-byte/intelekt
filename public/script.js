@@ -2,6 +2,7 @@ const nodes = {
   sheetTitle: document.getElementById("sheet-title"),
   syncStatus: document.getElementById("sync-status"),
   authLink: document.getElementById("auth-link"),
+  reportButton: document.getElementById("report-button"),
   accessPanel: document.getElementById("access-panel"),
   searchInput: document.getElementById("search-input"),
   refreshButton: document.getElementById("refresh-button"),
@@ -24,6 +25,7 @@ const state = {
   activeStatus: "all",
   query: "",
   loading: false,
+  reporting: false,
   collapsedSections: new Set()
 };
 
@@ -488,6 +490,7 @@ async function loadItems(allowSheetFallback = true) {
   if (state.loading) return;
   state.loading = true;
   nodes.refreshButton.disabled = true;
+  nodes.reportButton.disabled = true;
   setSync("Оновлення даних...");
 
   try {
@@ -506,6 +509,7 @@ async function loadItems(allowSheetFallback = true) {
       setActiveSheet("");
       state.loading = false;
       nodes.refreshButton.disabled = false;
+      nodes.reportButton.disabled = false;
       setSync("Поточний аркуш недоступний. Відкриваємо доступний аркуш...");
       await loadItems(false);
       return;
@@ -535,6 +539,7 @@ async function loadItems(allowSheetFallback = true) {
   } finally {
     state.loading = false;
     nodes.refreshButton.disabled = false;
+    nodes.reportButton.disabled = state.reporting;
   }
 }
 
@@ -644,6 +649,45 @@ async function changeEditableField(rowNumber, field, nextValue, inputNode) {
   }
 }
 
+async function sendReport() {
+  if (state.reporting || state.loading) return;
+  state.reporting = true;
+  nodes.reportButton.disabled = true;
+  setSync("Формування звіту для WhatsApp...");
+
+  try {
+    const response = await fetch("/api/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheetId: state.activeSheetId
+      })
+    });
+    const payload = await response.json();
+
+    if (response.status === 401 && payload.authUrl) {
+      handleAuthRequired(payload);
+      return;
+    }
+
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+
+    if (payload.whatsappUrl) {
+      window.open(payload.whatsappUrl, "_blank", "noopener,noreferrer");
+    }
+
+    setSync(payload.whatsappUrl
+      ? `Звіт сформовано: ${payload.sheetTitle}`
+      : `Apps Script виконано: ${payload.functionName}`);
+  } catch (error) {
+    console.error(error);
+    setSync(error.message || "Не вдалося сформувати звіт.", true);
+  } finally {
+    state.reporting = false;
+    nodes.reportButton.disabled = state.loading;
+  }
+}
+
 nodes.sheetTabs.addEventListener("click", (event) => {
   const button = event.target.closest("[data-sheet-id]");
   if (!button) return;
@@ -698,6 +742,7 @@ nodes.searchInput.addEventListener("input", (event) => {
 });
 
 nodes.refreshButton.addEventListener("click", loadItems);
+nodes.reportButton.addEventListener("click", sendReport);
 
 window.addEventListener("popstate", () => {
   const params = new URLSearchParams(window.location.search);

@@ -124,7 +124,23 @@ h1 {
   font-weight: 800;
 }
 
-.icon-button:disabled {
+.action-button {
+  display: grid;
+  place-items: center;
+  min-width: 112px;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid rgba(61, 220, 151, 0.56);
+  border-radius: 8px;
+  background: #102018;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.icon-button:disabled,
+.action-button:disabled {
   opacity: 0.55;
   cursor: progress;
 }
@@ -837,7 +853,7 @@ tbody tr:hover td {
     top: 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 46px;
+    grid-template-columns: minmax(0, 1fr) 46px minmax(88px, auto);
     gap: 8px;
     padding: 8px 0;
     background: rgba(9, 14, 20, 0.94);
@@ -854,6 +870,13 @@ tbody tr:hover td {
     width: 46px;
     height: 46px;
     font-size: 22px;
+  }
+
+  .action-button {
+    min-width: 88px;
+    height: 46px;
+    padding: 0 10px;
+    font-size: 12px;
   }
 
   .sync-panel {
@@ -1262,11 +1285,12 @@ tbody tr:hover td {
   }
 
   .header-actions {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) 44px minmax(82px, auto);
   }
 
   .search-box input,
-  .icon-button {
+  .icon-button,
+  .action-button {
     height: 44px;
   }
 

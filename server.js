@@ -33,11 +33,13 @@ const SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/spreadsheets"
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/script.scriptapp"
 ];
 
 const SHEET_RANGE = process.env.GOOGLE_SHEET_RANGE || "A1:I1000";
 const HIDE_NON_EDITABLE_SHEETS = process.env.HIDE_NON_EDITABLE_SHEETS !== "false";
+const REPORT_FUNCTION_PREFIX = process.env.REPORT_FUNCTION_PREFIX || "\u043d\u0430\u0434\u0456\u0441\u043b\u0430\u0442\u0438\u0417\u0432\u0456\u0442_";
 const STATUS_COLUMN_INDEX = 5;
 const EDITABLE_FIELD_COLUMNS = {
   damage: 6,
@@ -331,6 +333,11 @@ async function sheetsClient(request) {
   return google.sheets({ version: "v4", auth });
 }
 
+async function appsScriptClient(request) {
+  const auth = await authClient(request);
+  return google.script({ version: "v1", auth });
+}
+
 function currentUser(request) {
   const { session, store } = currentSession(request);
   if (!session?.userId) return null;
@@ -537,6 +544,20 @@ function statusByKey(key) {
 
 function statusByKeyStrict(key) {
   return STATUSES.find((status) => status.key === key) || null;
+}
+
+function appsScriptFunctionSuffix(sheetTitle) {
+  return clean(sheetTitle)
+    .replace(/\s+/g, "")
+    .replace(/[^\p{L}\p{N}_]/gu, "");
+}
+
+function reportFunctionName(sheetTitle) {
+  const map = process.env.REPORT_FUNCTION_MAP
+    ? JSON.parse(process.env.REPORT_FUNCTION_MAP)
+    : null;
+  if (map && map[sheetTitle]) return map[sheetTitle];
+  return `${REPORT_FUNCTION_PREFIX}${appsScriptFunctionSuffix(sheetTitle)}`;
 }
 
 function majorStatusForLabel(label) {
@@ -966,6 +987,47 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
   };
 }
 
+async function sendReport(request, requestedSheetId) {
+  const scriptId = requiredEnv("GOOGLE_APPS_SCRIPT_ID");
+  const sheets = await sheetsClient(request);
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
+  ensureSheetAccess(meta, requestedSheetId);
+  const selectedSheet = pickSheet(meta, requestedSheetId);
+  const functionName = reportFunctionName(selectedSheet.title);
+  const script = await appsScriptClient(request);
+
+  const response = await script.scripts.run({
+    scriptId,
+    requestBody: {
+      function: functionName,
+      parameters: [],
+      devMode: process.env.GOOGLE_APPS_SCRIPT_DEV_MODE === "true"
+    }
+  });
+
+  if (response.data.error) {
+    const details = response.data.error.details || [];
+    const scriptMessage = details
+      .map((detail) => detail.errorMessage || detail.message)
+      .filter(Boolean)
+      .join(" ");
+    throw new Error(scriptMessage || response.data.error.message || `Apps Script function failed: ${functionName}`);
+  }
+
+  const result = response.data.response?.result;
+  const whatsappUrl = typeof result === "string"
+    ? result
+    : result?.url || result?.whatsappUrl || result?.link || "";
+
+  return {
+    sheetId: selectedSheet.id,
+    sheetTitle: selectedSheet.title,
+    functionName,
+    result: result ?? null,
+    whatsappUrl
+  };
+}
+
 function sendJson(response, code, payload) {
   response.writeHead(code, {
     "Content-Type": "application/json; charset=utf-8",
@@ -1147,6 +1209,16 @@ const server = http.createServer(async (request, response) => {
     try {
       const body = await readBody(request);
       sendJson(response, 200, await updateEditableFields(request, Number(body.rowNumber), body.fields, body.sheetId));
+    } catch (error) {
+      sendError(response, error, 400);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/report" && request.method === "POST") {
+    try {
+      const body = await readBody(request);
+      sendJson(response, 200, await sendReport(request, body.sheetId));
     } catch (error) {
       sendError(response, error, 400);
     }
