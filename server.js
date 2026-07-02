@@ -12,6 +12,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const CREDENTIALS_PATH = path.join(__dirname, process.env.GOOGLE_CREDENTIALS_FILE || "credentials.json");
 const DATA_DIR = path.join(__dirname, process.env.DATA_DIR || ".data");
 const AUTH_STORE_PATH = path.join(DATA_DIR, process.env.AUTH_STORE_FILE || "auth-store.json");
+const SHEET_ACCESS_PATH = path.join(DATA_DIR, process.env.SHEET_ACCESS_FILE || "sheet-access.json");
 const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || "inventory_session";
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 168) * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -329,6 +330,55 @@ function currentUser(request) {
   };
 }
 
+function readSheetAccessRules() {
+  if (!fs.existsSync(SHEET_ACCESS_PATH)) return null;
+  return readJson(SHEET_ACCESS_PATH);
+}
+
+function normalizeSheetAccessList(value) {
+  if (value == null) return null;
+  if (Array.isArray(value)) return value.map(String);
+  return [String(value)];
+}
+
+function sheetAccessForUser(request) {
+  const rules = readSheetAccessRules();
+  if (!rules) return null;
+
+  const user = currentUser(request);
+  const email = String(user?.email || "").toLowerCase();
+  const users = rules.users || {};
+  const direct = email ? users[email] : undefined;
+  const wildcard = users["*"];
+  const fallback = Object.prototype.hasOwnProperty.call(rules, "default") ? rules.default : [];
+
+  return normalizeSheetAccessList(direct ?? wildcard ?? fallback) || [];
+}
+
+function applySheetAccess(request, meta) {
+  const allowed = sheetAccessForUser(request);
+  if (!allowed) return meta;
+
+  const allowedSet = new Set(allowed.map((item) => String(item).toLowerCase()));
+  const sheets = meta.sheets.filter((sheet) => {
+    return allowedSet.has(String(sheet.id).toLowerCase()) || allowedSet.has(String(sheet.title).toLowerCase());
+  });
+
+  return {
+    ...meta,
+    sheets
+  };
+}
+
+function ensureSheetAccess(meta, requestedSheetId) {
+  if (meta.sheets.length) return;
+
+  const suffix = requestedSheetId ? `: ${requestedSheetId}` : "";
+  const error = new Error(`Немає доступу до дозволених аркушів${suffix}.`);
+  error.code = "SHEET_ACCESS_DENIED";
+  throw error;
+}
+
 function quoteSheetName(name) {
   return `'${String(name).replaceAll("'", "''")}'`;
 }
@@ -629,12 +679,15 @@ function parseInventory(rows) {
 
 async function listSheets(request) {
   const sheets = await sheetsClient(request);
-  return getSpreadsheetMeta(sheets);
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  ensureSheetAccess(meta);
+  return meta;
 }
 
 async function readInventory(request, requestedSheetId) {
   const sheets = await sheetsClient(request);
-  const meta = await getSpreadsheetMeta(sheets);
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
   const range = `${quoteSheetName(selectedSheet.title)}!${SHEET_RANGE}`;
@@ -664,7 +717,8 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
   if (!Number.isInteger(rowNumber) || rowNumber < 1) throw new Error("Некоректний номер рядка.");
 
   const sheets = await sheetsClient(request);
-  const meta = await getSpreadsheetMeta(sheets);
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
   const sheetName = quoteSheetName(selectedSheet.title);
@@ -784,7 +838,8 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
   if (!updates.length) throw new Error("Немає дозволених полів для оновлення.");
 
   const sheets = await sheetsClient(request);
-  const meta = await getSpreadsheetMeta(sheets);
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
 
@@ -868,6 +923,11 @@ function readBody(request) {
 function sendError(response, error, fallbackCode = 500) {
   if (error.code === "AUTH_REQUIRED") {
     sendJson(response, 401, { error: error.message, authUrl: error.authUrl });
+    return;
+  }
+
+  if (error.code === "SHEET_ACCESS_DENIED") {
+    sendJson(response, 403, { error: error.message });
     return;
   }
 

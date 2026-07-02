@@ -41,3 +41,26 @@ npm start
 - `H`: Обставини пошкодження
 - `I`: Дата можливого виходу з ремонту
 #intelekt
+
+## Production sheet access
+
+Google Sheets shares access at spreadsheet-file level. To show only allowed
+worksheet tabs inside this app, create `.data/sheet-access.json` from
+`sheet-access.example.json`.
+
+Example:
+
+```json
+{
+  "default": [],
+  "users": {
+    "commander@example.com": ["968282677"],
+    "operator@example.com": ["1021102017", "1 РУБпАК"],
+    "*": []
+  }
+}
+```
+
+Use Google user email as the key. Values can be sheet `gid` numbers or sheet
+titles. When `sheet-access.json` exists, users not listed there see no tabs
+unless `default` or `users["*"]` allows them.

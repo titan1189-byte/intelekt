@@ -1,0 +1,8 @@
+{
+  "default": [],
+  "users": {
+    "commander@example.com": ["968282677"],
+    "operator@example.com": ["1021102017", "1 РУБпАК"],
+    "*": []
+  }
+}
