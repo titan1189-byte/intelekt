@@ -62,9 +62,13 @@ function setActiveSheet(sheetId, shouldPushUrl = true) {
   state.collapsedSections.clear();
   nodes.searchInput.value = "";
 
-  if (shouldPushUrl && state.activeSheetId) {
+  if (shouldPushUrl) {
     const url = new URL(window.location.href);
-    url.searchParams.set("sheetId", state.activeSheetId);
+    if (state.activeSheetId) {
+      url.searchParams.set("sheetId", state.activeSheetId);
+    } else {
+      url.searchParams.delete("sheetId");
+    }
     window.history.pushState({}, "", url);
   }
 }
@@ -480,7 +484,7 @@ function handleAuthRequired(payload) {
   setSync(payload.error || "Потрібна авторизація Google.", true);
 }
 
-async function loadItems() {
+async function loadItems(allowSheetFallback = true) {
   if (state.loading) return;
   state.loading = true;
   nodes.refreshButton.disabled = true;
@@ -495,6 +499,15 @@ async function loadItems() {
 
     if (response.status === 401 && payload.authUrl) {
       handleAuthRequired(payload);
+      return;
+    }
+
+    if (response.status === 403 && payload.code === "SHEET_ACCESS_DENIED" && state.activeSheetId && allowSheetFallback) {
+      setActiveSheet("");
+      state.loading = false;
+      nodes.refreshButton.disabled = false;
+      setSync("Поточний аркуш недоступний. Відкриваємо доступний аркуш...");
+      await loadItems(false);
       return;
     }
 

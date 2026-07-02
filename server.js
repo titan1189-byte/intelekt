@@ -1031,7 +1031,7 @@ function sendError(response, error, fallbackCode = 500) {
   }
 
   if (error.code === "SHEET_ACCESS_DENIED") {
-    sendJson(response, 403, { error: error.message });
+    sendJson(response, 403, { error: error.message, code: error.code });
     return;
   }
 
