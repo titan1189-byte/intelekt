@@ -183,6 +183,7 @@ function renderAccessPanel() {
       </div>
     </div>
     ${renderProtectedRanges(info.visibleSheets || [])}
+    <p class="access-note">Аркуші можуть бути приховані через правила апки або через заборону редагування в Google Sheets.</p>
   `;
 }
 

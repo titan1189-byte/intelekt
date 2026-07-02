@@ -37,6 +37,7 @@ const SCOPES = [
 ];
 
 const SHEET_RANGE = process.env.GOOGLE_SHEET_RANGE || "A1:I1000";
+const HIDE_NON_EDITABLE_SHEETS = process.env.HIDE_NON_EDITABLE_SHEETS !== "false";
 const STATUS_COLUMN_INDEX = 5;
 const EDITABLE_FIELD_COLUMNS = {
   damage: 6,
@@ -370,17 +371,44 @@ function sheetAccessForUser(request) {
 
 function applySheetAccess(request, meta) {
   const allowed = sheetAccessForUser(request);
-  if (!allowed) return meta;
+  const allowedSet = allowed
+    ? new Set(allowed.map((item) => String(item).toLowerCase()))
+    : null;
 
-  const allowedSet = new Set(allowed.map((item) => String(item).toLowerCase()));
   const sheets = meta.sheets.filter((sheet) => {
-    return allowedSet.has(String(sheet.id).toLowerCase()) || allowedSet.has(String(sheet.title).toLowerCase());
+    const isAllowedByApp = !allowedSet
+      || allowedSet.has(String(sheet.id).toLowerCase())
+      || allowedSet.has(String(sheet.title).toLowerCase());
+
+    return isAllowedByApp && !sheetEditBlockedByGoogle(sheet);
   });
 
   return {
     ...meta,
     sheets
   };
+}
+
+function sheetEditBlockedByGoogle(sheet) {
+  if (!HIDE_NON_EDITABLE_SHEETS) return false;
+
+  return (sheet.protectedRanges || []).some((range) => {
+    return !range.warningOnly && range.requestingUserCanEdit === false && protectedRangeCoversSheet(sheet, range);
+  });
+}
+
+function protectedRangeCoversSheet(sheet, protectedRange) {
+  const range = protectedRange.range;
+  if (!range) return true;
+
+  const rowCount = sheet.rowCount || 0;
+  const columnCount = sheet.columnCount || 0;
+  const startsAtFirstRow = !range.startRowIndex || range.startRowIndex <= 0;
+  const startsAtFirstColumn = !range.startColumnIndex || range.startColumnIndex <= 0;
+  const endsAtLastRow = !range.endRowIndex || !rowCount || range.endRowIndex >= rowCount;
+  const endsAtLastColumn = !range.endColumnIndex || !columnCount || range.endColumnIndex >= columnCount;
+
+  return startsAtFirstRow && startsAtFirstColumn && endsAtLastRow && endsAtLastColumn;
 }
 
 function ensureSheetAccess(meta, requestedSheetId) {
@@ -414,9 +442,12 @@ function normalizeSheet(sheet) {
     id: sheet.properties.sheetId,
     title: sheet.properties.title,
     index: sheet.properties.index,
+    rowCount: sheet.properties.gridProperties?.rowCount || 0,
+    columnCount: sheet.properties.gridProperties?.columnCount || 0,
     protectedRanges: (sheet.protectedRanges || []).map((range) => ({
       id: range.protectedRangeId,
       description: range.description || "",
+      range: range.range || null,
       warningOnly: Boolean(range.warningOnly),
       requestingUserCanEdit: range.requestingUserCanEdit !== false,
       users: range.editors?.users || [],
@@ -431,7 +462,7 @@ async function getSpreadsheetMeta(sheets, includeProtectedRanges = false) {
   const response = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: includeProtectedRanges
-      ? "properties(title),sheets(properties(sheetId,title,index),protectedRanges(protectedRangeId,description,warningOnly,requestingUserCanEdit,editors(users,groups,domainUsersCanEdit)))"
+      ? "properties(title),sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)),protectedRanges(protectedRangeId,description,range,warningOnly,requestingUserCanEdit,editors(users,groups,domainUsersCanEdit)))"
       : "properties(title),sheets(properties(sheetId,title,index))"
   });
 
@@ -447,6 +478,12 @@ function pickSheet(meta, requestedSheetId) {
   const byRequest = requestedSheetId
     ? meta.sheets.find((sheet) => String(sheet.id) === String(requestedSheetId))
     : null;
+  if (requestedSheetId && !byRequest) {
+    const error = new Error(`Немає доступу до аркуша: ${requestedSheetId}.`);
+    error.code = "SHEET_ACCESS_DENIED";
+    throw error;
+  }
+
   const byEnvGid = process.env.GOOGLE_SHEET_GID
     ? meta.sheets.find((sheet) => String(sheet.id) === String(process.env.GOOGLE_SHEET_GID))
     : null;
@@ -703,7 +740,7 @@ function parseInventory(rows) {
 
 async function listSheets(request) {
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta);
   return meta;
 }
@@ -732,7 +769,7 @@ async function accessInfo(request) {
 
 async function readInventory(request, requestedSheetId) {
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -763,7 +800,7 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
   if (!Number.isInteger(rowNumber) || rowNumber < 1) throw new Error("Некоректний номер рядка.");
 
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
@@ -884,7 +921,7 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
   if (!updates.length) throw new Error("Немає дозволених полів для оновлення.");
 
   const sheets = await sheetsClient(request);
-  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets));
+  const meta = applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
