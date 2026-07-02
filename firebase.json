@@ -24,23 +24,38 @@
     "rewrites": [
       {
         "source": "/api/**",
-        "function": "app"
+        "function": {
+          "functionId": "app",
+          "region": "europe-west1"
+        }
       },
       {
         "source": "/auth/google",
-        "function": "app"
+        "function": {
+          "functionId": "app",
+          "region": "europe-west1"
+        }
       },
       {
         "source": "/oauth2callback",
-        "function": "app"
+        "function": {
+          "functionId": "app",
+          "region": "europe-west1"
+        }
       },
       {
         "source": "/logout",
-        "function": "app"
+        "function": {
+          "functionId": "app",
+          "region": "europe-west1"
+        }
       },
       {
         "source": "/reauth",
-        "function": "app"
+        "function": {
+          "functionId": "app",
+          "region": "europe-west1"
+        }
       }
     ]
   }
