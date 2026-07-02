@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Local app for parsing inventory rows from Google Sheets and updating item statuses.",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js && node --check index.js && node --check public/script.js",

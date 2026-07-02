@@ -1,5 +1,11 @@
 node_modules/
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
 .env
+.env.*
+!.env.example
+!.env.firebase.example
 .data/
 token*.json
 credentials*.json

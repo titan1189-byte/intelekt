@@ -3,7 +3,7 @@ const { requestHandler } = require("./server");
 
 exports.app = onRequest(
   {
-    region: process.env.FIREBASE_FUNCTION_REGION || "europe-west1",
+    region: process.env.FUNCTION_REGION || "europe-west1",
     timeoutSeconds: 120,
     memory: "512MiB"
   },
