@@ -10,8 +10,6 @@
       ".data",
       ".env",
       ".env.*",
-      "!.env.example",
-      "!.env.firebase.example",
       "credentials*.json",
       "token*.json"
     ]
