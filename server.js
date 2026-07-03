@@ -858,6 +858,56 @@ function findInsertBeforeRowForTarget(values, targetSection, target) {
   return targetSection.endRow;
 }
 
+async function readStatusDataValidation(sheets, spreadsheetId, sheetName, rowNumber) {
+  const statusColumn = columnLetter(STATUS_COLUMN_INDEX);
+  const response = await sheets.spreadsheets.get({
+    spreadsheetId,
+    ranges: [
+      `${sheetName}!${statusColumn}${rowNumber}:${statusColumn}${rowNumber}`,
+      `${sheetName}!${statusColumn}1:${statusColumn}1000`
+    ],
+    includeGridData: true,
+    fields: "sheets(data(rowData(values(dataValidation))))"
+  });
+
+  const grids = response.data.sheets?.[0]?.data || [];
+  for (const grid of grids) {
+    for (const row of grid.rowData || []) {
+      const validation = row.values?.[0]?.dataValidation;
+      if (validation) return validation;
+    }
+  }
+
+  return null;
+}
+
+async function applyStatusDataValidation(sheets, spreadsheetId, sheetId, rowNumber, dataValidation) {
+  if (!dataValidation) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex: rowNumber - 1,
+              endRowIndex: rowNumber,
+              startColumnIndex: STATUS_COLUMN_INDEX,
+              endColumnIndex: STATUS_COLUMN_INDEX + 1
+            },
+            cell: {
+              dataValidation
+            },
+            fields: "dataValidation"
+          }
+        }
+      ]
+    }
+  });
+}
+
 function parseInventory(rows) {
   const headerIndex = findHeaderIndex(rows);
   const startIndex = headerIndex >= 0 ? headerIndex + 1 : 0;
@@ -989,6 +1039,7 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
   const target = resolveMoveTarget(values, statusTarget);
   const status = statusByKey(target.statusKey);
   const previousRawStatus = clean(rowData[STATUS_COLUMN_INDEX]);
+  const statusDataValidation = await readStatusDataValidation(sheets, spreadsheetId, sheetName, rowNumber);
 
   if (!rowData[1] && !rowData[2]) throw new Error("Порожній рядок не можна переносити.");
 
@@ -1109,6 +1160,7 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
         values: [rowData]
       }
     });
+    await applyStatusDataValidation(sheets, spreadsheetId, selectedSheet.id, insertBeforeRow, statusDataValidation);
   } catch (error) {
     logServerError("status-move-write-failed", error, {
       sheetId: selectedSheet.id,
