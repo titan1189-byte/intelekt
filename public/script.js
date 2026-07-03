@@ -25,11 +25,13 @@ const state = {
   query: "",
   loading: false,
   reporting: false,
-  collapsedSections: new Set()
+  collapsedSections: new Set(),
+  expandedMobileSections: new Set()
 };
 
 const statusOrder = ["stock", "repair", "damaged", "lost"];
 const editableDetailStatuses = new Set(["repair", "damaged"]);
+const mobileCollapseQuery = window.matchMedia("(max-width: 760px)");
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -78,6 +80,7 @@ function setActiveSheet(sheetId, shouldPushUrl = true) {
   state.activeStatus = "all";
   state.query = "";
   state.collapsedSections.clear();
+  state.expandedMobileSections.clear();
   nodes.searchInput.value = "";
 
   if (shouldPushUrl) {
@@ -231,6 +234,12 @@ function sectionKey(section) {
   return section.key || section.sheetValue || section.label || "section";
 }
 
+function isSectionCollapsed(blockKey) {
+  if (state.collapsedSections.has(blockKey)) return true;
+  if (mobileCollapseQuery.matches) return !state.expandedMobileSections.has(blockKey);
+  return false;
+}
+
 function editableTextArea(item, field, label) {
   return `
     <textarea class="editable-field" data-row="${item.rowNumber}" data-field="${field}" aria-label="${escapeHtml(label)}">${escapeHtml(item[field])}</textarea>
@@ -299,7 +308,10 @@ function renderMobileItemCard(item, showEditableDetails) {
           <span class="mobile-number">№ ${escapeHtml(item.displayNumber || item.rowNumber)}</span>
           <h3>${escapeHtml(item.name)}</h3>
         </div>
-        <span class="mobile-qty">${escapeHtml([item.quantity, item.unit].filter(Boolean).join(" "))}</span>
+        <div class="mobile-card-side">
+          <span class="mobile-qty">${escapeHtml([item.quantity, item.unit].filter(Boolean).join(" "))}</span>
+          ${statusSelect(item)}
+        </div>
       </div>
       <dl class="mobile-fields">
         <div>
@@ -374,7 +386,7 @@ function renderSectionBlock(section, items) {
   const sectionTitle = section.label || section.sheetValue || status.label;
   const subtitle = section.isMajor ? "" : status.label;
   const blockKey = sectionKey(section);
-  const isCollapsed = state.collapsedSections.has(blockKey);
+  const isCollapsed = isSectionCollapsed(blockKey);
   const showEditableDetails = editableDetailStatuses.has(status.key);
   const tableColumnCount = showEditableDetails ? 8 : 5;
   const detailHeaders = showEditableDetails
@@ -714,10 +726,12 @@ nodes.itemsBody.addEventListener("click", (event) => {
   const key = toggle.dataset.sectionKey;
   if (!key) return;
 
-  if (state.collapsedSections.has(key)) {
+  if (isSectionCollapsed(key)) {
     state.collapsedSections.delete(key);
+    state.expandedMobileSections.add(key);
   } else {
     state.collapsedSections.add(key);
+    state.expandedMobileSections.delete(key);
   }
 
   renderRows();
@@ -733,6 +747,8 @@ nodes.searchInput.addEventListener("input", (event) => {
   state.query = event.target.value;
   renderRows();
 });
+
+mobileCollapseQuery.addEventListener("change", renderRows);
 
 nodes.refreshButton.addEventListener("click", loadItems);
 nodes.reportButton.addEventListener("click", sendReport);

@@ -919,8 +919,8 @@ textarea.editable-field:focus {
 
   .inventory-item-card {
     display: grid;
-    gap: 10px;
-    padding: 12px;
+    gap: 8px;
+    padding: 10px;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--panel);
@@ -944,16 +944,23 @@ textarea.editable-field:focus {
 
   .mobile-card-top {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(136px, 34%);
     align-items: start;
-    gap: 10px;
+    gap: 8px;
   }
 
   .mobile-card-top h3 {
-    margin: 4px 0 0;
-    font-size: 16px;
+    margin: 3px 0 0;
+    font-size: 15px;
     line-height: 1.25;
     overflow-wrap: anywhere;
+  }
+
+  .mobile-card-side {
+    display: grid;
+    justify-items: end;
+    gap: 6px;
+    min-width: 0;
   }
 
   .mobile-number,
@@ -965,9 +972,9 @@ textarea.editable-field:focus {
 
   .mobile-qty {
     flex: 0 0 auto;
-    min-width: 42px;
-    min-height: 28px;
-    padding: 6px 8px;
+    min-width: 38px;
+    min-height: 24px;
+    padding: 4px 8px;
     border: 1px solid var(--line-soft);
     border-radius: 8px;
     background: #0d141d;
@@ -978,8 +985,13 @@ textarea.editable-field:focus {
   .mobile-fields {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+    gap: 8px;
     margin: 0;
+  }
+
+  .mobile-fields > div:nth-child(2),
+  .mobile-fields > div:nth-child(3) {
+    display: none;
   }
 
   .mobile-fields div {
@@ -1013,6 +1025,10 @@ textarea.editable-field:focus {
   .editable-field.single-line {
     width: 100%;
     min-width: 0;
+  }
+
+  .mobile-card-side .status-select {
+    width: 100%;
   }
 }
 
@@ -1100,8 +1116,7 @@ textarea.editable-field:focus {
 
   .sheet-tabs,
   .status-tabs,
-  .stats-grid,
-  .access-summary {
+  .stats-grid {
     margin-left: 0;
     margin-right: 0;
     padding-left: 10px;
@@ -1113,8 +1128,7 @@ textarea.editable-field:focus {
 
   .sheet-tabs::-webkit-scrollbar,
   .status-tabs::-webkit-scrollbar,
-  .stats-grid::-webkit-scrollbar,
-  .access-summary::-webkit-scrollbar {
+  .stats-grid::-webkit-scrollbar {
     display: none;
   }
 
@@ -1123,14 +1137,18 @@ textarea.editable-field:focus {
   }
 
   .access-summary {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr;
     gap: 8px;
+    margin-left: 0;
+    margin-right: 0;
     margin-bottom: 0;
+    overflow: visible;
   }
 
   .access-summary div {
-    flex: 0 0 210px;
-    min-height: 68px;
+    width: 100%;
+    min-height: 62px;
     padding: 12px;
     scroll-snap-align: start;
   }
@@ -1327,8 +1345,8 @@ textarea.editable-field:focus {
 
   .inventory-item-card {
     display: grid;
-    gap: 10px;
-    padding: 12px;
+    gap: 8px;
+    padding: 10px;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--panel);
@@ -1352,16 +1370,23 @@ textarea.editable-field:focus {
 
   .mobile-card-top {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(128px, 42%);
     align-items: start;
-    gap: 10px;
+    gap: 8px;
   }
 
   .mobile-card-top h3 {
-    margin: 4px 0 0;
-    font-size: 16px;
+    margin: 3px 0 0;
+    font-size: 15px;
     line-height: 1.25;
     overflow-wrap: anywhere;
+  }
+
+  .mobile-card-side {
+    display: grid;
+    justify-items: end;
+    gap: 6px;
+    min-width: 0;
   }
 
   .mobile-number,
@@ -1373,9 +1398,9 @@ textarea.editable-field:focus {
 
   .mobile-qty {
     flex: 0 0 auto;
-    min-width: 42px;
-    min-height: 28px;
-    padding: 6px 8px;
+    min-width: 38px;
+    min-height: 24px;
+    padding: 4px 8px;
     border: 1px solid var(--line-soft);
     border-radius: 8px;
     background: #0d141d;
@@ -1385,8 +1410,13 @@ textarea.editable-field:focus {
 
   .mobile-fields {
     display: grid;
-    gap: 10px;
+    gap: 8px;
     margin: 0;
+  }
+
+  .mobile-fields > div:nth-child(2),
+  .mobile-fields > div:nth-child(3) {
+    display: none;
   }
 
   .mobile-fields div {
@@ -1419,9 +1449,13 @@ textarea.editable-field:focus {
   }
 
   .status-select {
-    height: 44px;
-    padding: 0 12px;
-    font-size: 14px;
+    height: 40px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .mobile-card-side .status-select {
+    width: 100%;
   }
 
   .editable-field {
@@ -1521,12 +1555,8 @@ textarea.editable-field:focus {
     padding-right: 0;
   }
 
-  .mobile-card-top {
-    grid-template-columns: 1fr;
-  }
-
   .mobile-qty {
-    justify-self: start;
+    justify-self: end;
   }
 }
 
