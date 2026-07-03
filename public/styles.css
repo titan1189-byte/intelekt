@@ -244,6 +244,34 @@ h1 {
   padding: 14px;
 }
 
+.access-summary .account-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.access-summary .account-card span,
+.access-summary .account-card strong {
+  grid-column: 1;
+}
+
+.logout-button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 122, 24, 0.55);
+  border-radius: 8px;
+  background: rgba(255, 122, 24, 0.12);
+  color: var(--orange);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.logout-button:hover {
+  background: rgba(255, 122, 24, 0.2);
+}
+
 .access-summary span,
 .protected-list h3 {
   color: var(--muted);
@@ -1151,6 +1179,21 @@ textarea.editable-field:focus {
     min-height: 62px;
     padding: 12px;
     scroll-snap-align: start;
+  }
+
+  .access-summary .account-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 10px;
+  }
+
+  .access-summary .account-card strong {
+    overflow-wrap: anywhere;
+  }
+
+  .logout-button {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 12px;
   }
 
   .protected-list section,

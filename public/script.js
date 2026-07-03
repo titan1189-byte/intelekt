@@ -178,9 +178,10 @@ function renderAccessPanel() {
   nodes.accessPanel.hidden = false;
   nodes.accessPanel.innerHTML = `
     <div class="access-summary">
-      <div>
+      <div class="account-card">
         <span>Google акаунт</span>
         <strong>${escapeHtml(info.user.email || info.user.name)}</strong>
+        <a class="logout-button" href="/logout?clear=1">Вийти</a>
       </div>
     </div>
   `;
