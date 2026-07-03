@@ -15,6 +15,7 @@
     ]
   },
   "hosting": {
+    "site": "project-112eca27-802a-43bd-b93",
     "public": "public",
     "ignore": [
       "firebase.json",

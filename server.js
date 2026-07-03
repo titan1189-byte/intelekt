@@ -28,7 +28,8 @@ const AUTH_STORE_PATH = path.join(DATA_DIR, process.env.AUTH_STORE_FILE || "auth
 const SHEET_ACCESS_PATH = path.join(DATA_DIR, process.env.SHEET_ACCESS_FILE || "sheet-access.json");
 const AUTH_STORE_BACKEND = process.env.AUTH_STORE_BACKEND || (process.env.K_SERVICE ? "firestore" : "file");
 const FIRESTORE_AUTH_DOC = process.env.FIRESTORE_AUTH_DOC || "runtime/authStore";
-const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || "inventory_session";
+const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || (process.env.K_SERVICE ? "__session" : "inventory_session");
+const SESSION_COOKIE_DOMAIN = process.env.SESSION_COOKIE_DOMAIN || "";
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 168) * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SCOPES = [
@@ -48,6 +49,30 @@ const EDITABLE_FIELD_COLUMNS = {
   circumstances: 7,
   repairDate: 8
 };
+
+function logAuth(event, details = {}) {
+  console.info(JSON.stringify({
+    area: "auth",
+    event,
+    store: AUTH_STORE_BACKEND,
+    service: process.env.K_SERVICE || "local",
+    ...details
+  }));
+}
+
+function logServerError(event, error, details = {}) {
+  const googleError = error?.response?.data?.error || error?.response?.data || null;
+  console.error(JSON.stringify({
+    area: "server",
+    event,
+    name: error?.name,
+    code: error?.code || error?.response?.status || "",
+    message: error?.message || String(error),
+    googleMessage: googleError?.message || "",
+    googleStatus: googleError?.status || "",
+    ...details
+  }));
+}
 
 const STATUSES = [
   { key: "stock", label: "На складі", sheetValue: "На складі підрозділу" },
@@ -130,13 +155,21 @@ function cookieOptions(request) {
     "HttpOnly",
     "Path=/",
     "SameSite=Lax",
+    SESSION_COOKIE_DOMAIN ? `Domain=${SESSION_COOKIE_DOMAIN}` : "",
     `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
     isHttps ? "Secure" : ""
   ].filter(Boolean).join("; ");
 }
 
 function setSessionCookie(response, request, sessionId) {
-  response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; ${cookieOptions(request)}`);
+  const options = cookieOptions(request);
+  response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; ${options}`);
+  logAuth("set-cookie", {
+    host: request.headers.host || "",
+    proto: request.headers["x-forwarded-proto"] || "",
+    domain: SESSION_COOKIE_DOMAIN || "host-only",
+    secure: options.includes("Secure")
+  });
 }
 
 function clearSessionCookie(response) {
@@ -223,6 +256,10 @@ async function createAuthUrl(returnTo = "/") {
     expiresAt: Date.now() + OAUTH_STATE_TTL_MS
   };
   await writeAuthStore(store);
+  logAuth("state-created", {
+    returnTo,
+    pendingStates: Object.keys(store.pendingStates || {}).length
+  });
 
   return oauthClient().generateAuthUrl({
     access_type: "offline",
@@ -256,6 +293,11 @@ async function fetchGoogleUser(client) {
 async function createUserSession(request, response, code, state) {
   const store = await readAuthStore();
   cleanupAuthStore(store);
+  logAuth("callback-start", {
+    hasCode: Boolean(code),
+    hasState: Boolean(state),
+    pendingStates: Object.keys(store.pendingStates || {}).length
+  });
 
   const pending = store.pendingStates[state];
   if (!state || !pending) throw new Error("OAuth сесія застаріла. Спробуйте увійти ще раз.");
@@ -266,6 +308,10 @@ async function createUserSession(request, response, code, state) {
   client.setCredentials(tokens);
 
   const profile = await fetchGoogleUser(client);
+  logAuth("profile-loaded", {
+    email: profile.email || "",
+    hasRefreshToken: Boolean(tokens.refresh_token)
+  });
   const previousUser = store.users[profile.id] || {};
   const previousTokens = previousUser.tokens || {};
 
@@ -288,17 +334,39 @@ async function createUserSession(request, response, code, state) {
 
   await writeAuthStore(store);
   setSessionCookie(response, request, sessionId);
+  logAuth("session-created", {
+    email: profile.email || "",
+    returnTo: pending.returnTo || "/",
+    sessions: Object.keys(store.sessions || {}).length
+  });
 
   return pending.returnTo || "/";
 }
 
 async function authClient(request) {
-  const { session, store } = await currentSession(request);
-  if (!session?.userId) throw authRequiredError();
+  const { sessionId, session, store } = await currentSession(request);
+  if (!session?.userId) {
+    logAuth("auth-client-miss", {
+      path: request.url || "",
+      hasCookie: Boolean(sessionId),
+      hasSession: Boolean(session?.userId),
+      cookieHeader: Boolean(request.headers.cookie)
+    });
+    throw authRequiredError();
+  }
 
   const user = store.users[session.userId];
   const token = user?.tokens;
-  if (!token) throw authRequiredError();
+  if (!token) {
+    logAuth("auth-client-miss", {
+      path: request.url || "",
+      hasCookie: Boolean(sessionId),
+      hasSession: true,
+      missingToken: true,
+      cookieHeader: Boolean(request.headers.cookie)
+    });
+    throw authRequiredError();
+  }
 
   const client = oauthClient();
   client.setCredentials(token);
@@ -327,10 +395,27 @@ async function appsScriptClient(request) {
 }
 
 async function currentUser(request) {
-  const { session, store } = await currentSession(request);
-  if (!session?.userId) return null;
+  const { sessionId, session, store } = await currentSession(request);
+  if (!session?.userId) {
+    logAuth("current-user-miss", {
+      hasCookie: Boolean(sessionId),
+      hasSession: Boolean(session?.userId)
+    });
+    return null;
+  }
   const user = store.users[session.userId];
-  if (!user) return null;
+  if (!user) {
+    logAuth("current-user-miss", {
+      hasCookie: Boolean(sessionId),
+      hasSession: true,
+      missingUser: true
+    });
+    return null;
+  }
+  logAuth("current-user-hit", {
+    email: user.email || "",
+    hasCookie: Boolean(sessionId)
+  });
 
   return {
     email: user.email,
@@ -367,6 +452,8 @@ async function sheetAccessForUser(request) {
 
 async function applySheetAccess(request, meta) {
   const allowed = await sheetAccessForUser(request);
+  const user = await currentUser(request);
+  const userEmail = String(user?.email || "").toLowerCase();
   const allowedSet = allowed
     ? new Set(allowed.map((item) => String(item).toLowerCase()))
     : null;
@@ -376,7 +463,7 @@ async function applySheetAccess(request, meta) {
       || allowedSet.has(String(sheet.id).toLowerCase())
       || allowedSet.has(String(sheet.title).toLowerCase());
 
-    return isAllowedByApp && !sheetEditBlockedByGoogle(sheet);
+    return isAllowedByApp && !sheetEditBlockedByGoogle(sheet, userEmail);
   });
 
   return {
@@ -387,6 +474,8 @@ async function applySheetAccess(request, meta) {
 
 async function sheetHiddenReason(request, sheet) {
   const allowed = await sheetAccessForUser(request);
+  const user = await currentUser(request);
+  const userEmail = String(user?.email || "").toLowerCase();
   const allowedSet = allowed
     ? new Set(allowed.map((item) => String(item).toLowerCase()))
     : null;
@@ -395,16 +484,42 @@ async function sheetHiddenReason(request, sheet) {
     || allowedSet.has(String(sheet.title).toLowerCase());
 
   if (!allowedByApp) return "app";
-  if (sheetEditBlockedByGoogle(sheet)) return "google_protected";
+  if (sheetEditBlockedByGoogle(sheet, userEmail)) return "google_protected";
   return "";
 }
 
-function sheetEditBlockedByGoogle(sheet) {
+function sheetEditBlockedByGoogle(sheet, userEmail = "") {
   if (!HIDE_NON_EDITABLE_SHEETS) return false;
 
   return (sheet.protectedRanges || []).some((range) => {
-    return !range.warningOnly && range.requestingUserCanEdit === false && protectedRangeCoversSheet(sheet, range);
+    return !range.warningOnly
+      && !protectedRangeEditableByUser(range, userEmail)
+      && protectedRangeCoversSheet(sheet, range)
+      && !protectedRangeHasEditableExceptions(range);
   });
+}
+
+function protectedRangeEditableByUser(protectedRange, userEmail = "") {
+  if (protectedRange.requestingUserCanEdit === true) return true;
+
+  const email = String(userEmail || "").toLowerCase();
+  if (!email) return protectedRange.requestingUserCanEdit !== false;
+
+  if ((protectedRange.users || []).some((user) => String(user).toLowerCase() === email)
+    || (protectedRange.editors?.users || []).some((user) => String(user).toLowerCase() === email)
+    || protectedRange.domainUsersCanEdit === true
+    || protectedRange.editors?.domainUsersCanEdit === true) {
+    return true;
+  }
+
+  // The Sheets API sometimes omits requestingUserCanEdit/editors even when
+  // the Sheets UI shows the current user as an allowed editor. Only hide when
+  // Google explicitly returns false; treat omitted values as unknown/visible.
+  return protectedRange.requestingUserCanEdit !== false;
+}
+
+function protectedRangeHasEditableExceptions(protectedRange) {
+  return (protectedRange.unprotectedRanges || []).some(Boolean);
 }
 
 function protectedRangeCoversSheet(sheet, protectedRange) {
@@ -458,8 +573,11 @@ function normalizeSheet(sheet) {
       id: range.protectedRangeId,
       description: range.description || "",
       range: range.range || null,
+      unprotectedRanges: range.unprotectedRanges || [],
       warningOnly: Boolean(range.warningOnly),
-      requestingUserCanEdit: Boolean(range.requestingUserCanEdit),
+      requestingUserCanEdit: typeof range.requestingUserCanEdit === "boolean"
+        ? range.requestingUserCanEdit
+        : null,
       users: range.editors?.users || [],
       groups: range.editors?.groups || [],
       domainUsersCanEdit: Boolean(range.editors?.domainUsersCanEdit)
@@ -472,7 +590,7 @@ async function getSpreadsheetMeta(sheets, includeProtectedRanges = false) {
   const response = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: includeProtectedRanges
-      ? "properties(title),sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)),protectedRanges(protectedRangeId,description,range,warningOnly,requestingUserCanEdit,editors(users,groups,domainUsersCanEdit)))"
+      ? "properties(title),sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)),protectedRanges(protectedRangeId,description,range,unprotectedRanges,warningOnly,requestingUserCanEdit,editors(users,groups,domainUsersCanEdit)))"
       : "properties(title),sheets(properties(sheetId,title,index))"
   });
 
@@ -887,43 +1005,86 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
   let insertBeforeRow = findInsertBeforeRowForTarget(values, targetSection, target);
   if (rowNumber < insertBeforeRow) insertBeforeRow -= 1;
 
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          deleteDimension: {
-            range: {
-              sheetId: selectedSheet.id,
-              dimension: "ROWS",
-              startIndex: rowNumber - 1,
-              endIndex: rowNumber
-            }
-          }
-        },
-        {
-          insertDimension: {
-            range: {
-              sheetId: selectedSheet.id,
-              dimension: "ROWS",
-              startIndex: insertBeforeRow - 1,
-              endIndex: insertBeforeRow
-            },
-            inheritFromBefore: true
-          }
-        }
-      ]
-    }
-  });
+  console.info(JSON.stringify({
+    area: "sheets",
+    event: "status-move-start",
+    sheetId: selectedSheet.id,
+    sheetTitle: selectedSheet.title,
+    rowNumber,
+    insertBeforeRow,
+    target: target.statusKey,
+    targetValue: target.sheetValue
+  }));
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${sheetName}!A${insertBeforeRow}:I${insertBeforeRow}`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [rowData]
-    }
-  });
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId: selectedSheet.id,
+                dimension: "ROWS",
+                startIndex: rowNumber - 1,
+                endIndex: rowNumber
+              }
+            }
+          },
+          {
+            insertDimension: {
+              range: {
+                sheetId: selectedSheet.id,
+                dimension: "ROWS",
+                startIndex: insertBeforeRow - 1,
+                endIndex: insertBeforeRow
+              },
+              inheritFromBefore: true
+            },
+          }
+        ]
+      }
+    });
+  } catch (error) {
+    logServerError("status-move-batch-failed", error, {
+      sheetId: selectedSheet.id,
+      rowNumber,
+      insertBeforeRow,
+      target: target.statusKey
+    });
+    throw error;
+  }
+
+  const writeRange = `${sheetName}!A${insertBeforeRow}:I${insertBeforeRow}`;
+  try {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: writeRange,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [rowData]
+      }
+    });
+  } catch (error) {
+    logServerError("status-move-write-failed", error, {
+      sheetId: selectedSheet.id,
+      rowNumber,
+      insertBeforeRow,
+      target: target.statusKey,
+      range: writeRange
+    });
+    throw error;
+  }
+
+  console.info(JSON.stringify({
+    area: "sheets",
+    event: "status-move-finished",
+    sheetId: selectedSheet.id,
+    rowNumber,
+    newRowNumber: insertBeforeRow,
+    target: target.statusKey,
+    range: writeRange
+  }));
 
   return {
     rowNumber,
@@ -934,7 +1095,7 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
     status: status.key,
     statusLabel: status.label,
     statusRaw: target.sheetValue,
-    range: `${sheetName}!A${insertBeforeRow}:I${insertBeforeRow}`
+    range: writeRange
   };
 }
 
@@ -1083,6 +1244,8 @@ function sendError(response, error, fallbackCode = 500) {
     return;
   }
 
+  logServerError("request-error", error, { fallbackCode });
+
   if (error.code === "SHEET_ACCESS_DENIED") {
     sendJson(response, 403, { error: error.message, code: error.code });
     return;
@@ -1105,9 +1268,13 @@ async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
   if (url.pathname === "/auth/google") {
-    const returnTo = normalizeReturnTo(url.searchParams.get("returnTo") || request.headers.referer || "/", request);
-    response.writeHead(302, { Location: await createAuthUrl(returnTo) });
-    response.end();
+    try {
+      const returnTo = normalizeReturnTo(url.searchParams.get("returnTo") || request.headers.referer || "/", request);
+      response.writeHead(302, { Location: await createAuthUrl(returnTo) });
+      response.end();
+    } catch (error) {
+      sendError(response, error);
+    }
     return;
   }
 
@@ -1224,11 +1391,20 @@ async function requestHandler(request, response) {
   sendJson(response, 404, { error: "Route not found" });
 }
 
-if (require.main === module) {
-  const server = http.createServer(requestHandler);
+function startServer() {
+  const server = http.createServer((request, response) => {
+    requestHandler(request, response).catch((error) => {
+      sendError(response, error);
+    });
+  });
   server.listen(PORT, HOST, () => {
     console.log(`Inventory Status App: http://${HOST}:${PORT}`);
   });
+  return server;
 }
 
-module.exports = { requestHandler };
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { requestHandler, startServer };

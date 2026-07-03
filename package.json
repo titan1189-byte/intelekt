@@ -5,9 +5,12 @@
   "description": "Local app for parsing inventory rows from Google Sheets and updating item statuses.",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node local-dev.js",
+    "start:local": "node local-dev.js",
+    "start:function": "node server.js",
     "check": "node --check server.js && node --check index.js && node --check public/script.js",
     "deploy": "firebase deploy",
+    "deploy:production": "firebase deploy --project project-112eca27-802a-43bd-b93",
     "deploy:hosting": "firebase deploy --only hosting",
     "deploy:functions": "firebase deploy --only functions"
   },

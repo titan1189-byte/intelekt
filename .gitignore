@@ -1,5 +1,8 @@
 node_modules/
 .firebase/
+.firebase-config/
+.firebase-cli-config/
+*.log
 firebase-debug.log
 firebase-debug.*.log
 .env
@@ -9,3 +12,5 @@ firebase-debug.*.log
 .data/
 token*.json
 credentials*.json
+service-account*.json
+firebase-service-account*.json

@@ -8,7 +8,6 @@ const nodes = {
   refreshButton: document.getElementById("refresh-button"),
   sheetTabs: document.getElementById("sheet-tabs"),
   statusTabs: document.getElementById("status-tabs"),
-  statsGrid: document.getElementById("stats-grid"),
   resultCount: document.getElementById("result-count"),
   itemsBody: document.getElementById("items-body"),
   emptyState: document.getElementById("empty-state")
@@ -30,9 +29,10 @@ const state = {
 };
 
 const statusOrder = ["stock", "repair", "damaged", "lost"];
+const editableDetailStatuses = new Set(["repair", "damaged"]);
 
 function escapeHtml(value) {
-  return String(value || "")
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -74,7 +74,7 @@ async function readJsonResponse(response) {
 }
 
 function setActiveSheet(sheetId, shouldPushUrl = true) {
-  state.activeSheetId = String(sheetId || "");
+  state.activeSheetId = String(sheetId ?? "");
   state.activeStatus = "all";
   state.query = "";
   state.collapsedSections.clear();
@@ -153,19 +153,6 @@ function renderStatusTabs() {
     .join("");
 }
 
-function renderStats() {
-  const counts = countsByStatus();
-
-  nodes.statsGrid.innerHTML = state.statuses
-    .map((status) => `
-      <article class="stat-card tone-${status.key}">
-        <span>${escapeHtml(status.label)}</span>
-        <strong>${counts[status.key] || 0}</strong>
-      </article>
-    `)
-    .join("");
-}
-
 function renderAccessPanel() {
   const info = state.accessInfo;
   if (!info || !info.user) {
@@ -191,22 +178,6 @@ function renderAccessPanel() {
       <div>
         <span>Google акаунт</span>
         <strong>${escapeHtml(info.user.email || info.user.name)}</strong>
-      </div>
-      <div>
-        <span>Доступ в апці</span>
-        <strong>${escapeHtml(appAccessText)}</strong>
-      </div>
-      <div>
-        <span>Видимість</span>
-        <strong>${escapeHtml(hiddenText)}</strong>
-      </div>
-      <div>
-        <span>Google захист</span>
-        <strong>${googleHiddenCount ? `Сховано: ${googleHiddenCount}` : "Не приховує"}</strong>
-      </div>
-      <div>
-        <span>Захищені діапазони</span>
-        <strong>${protectedCount}</strong>
       </div>
     </div>
   `;
@@ -266,13 +237,28 @@ function editableTextArea(item, field, label) {
   `;
 }
 
+function resizeEditableTextAreas(root = document) {
+  root.querySelectorAll("textarea.editable-field").forEach((field) => {
+    field.style.height = "auto";
+    field.style.height = `${Math.max(field.scrollHeight, 58)}px`;
+  });
+}
+
 function editableInput(item, field, label) {
   return `
     <input class="editable-field single-line" data-row="${item.rowNumber}" data-field="${field}" aria-label="${escapeHtml(label)}" value="${escapeHtml(item[field])}">
   `;
 }
 
-function renderItemRow(item) {
+function renderEditableDetailCells(item) {
+  return `
+      <td class="text-cell">${editableTextArea(item, "damage", "Пошкодження / примітка")}</td>
+      <td class="text-cell">${editableTextArea(item, "circumstances", "Обставини")}</td>
+      <td>${editableInput(item, "repairDate", "Вихід з ремонту")}</td>
+  `;
+}
+
+function renderItemRow(item, showEditableDetails) {
   return `
     <tr class="row-${item.status}" data-row="${item.rowNumber}">
       <td class="number-cell">
@@ -283,14 +269,29 @@ function renderItemRow(item) {
       <td>${escapeHtml(item.serial)}</td>
       <td class="quantity-cell">${escapeHtml([item.quantity, item.unit].filter(Boolean).join(" "))}</td>
       <td>${statusSelect(item)}</td>
-      <td class="text-cell">${editableTextArea(item, "damage", "Пошкодження / примітка")}</td>
-      <td class="text-cell">${editableTextArea(item, "circumstances", "Обставини")}</td>
-      <td>${editableInput(item, "repairDate", "Вихід з ремонту")}</td>
+      ${showEditableDetails ? renderEditableDetailCells(item) : ""}
     </tr>
   `;
 }
 
-function renderMobileItemCard(item) {
+function renderMobileEditableDetails(item) {
+  return `
+        <div>
+          <dt>Пошкодження / примітка</dt>
+          <dd>${editableTextArea(item, "damage", "Пошкодження / примітка")}</dd>
+        </div>
+        <div>
+          <dt>Обставини</dt>
+          <dd>${editableTextArea(item, "circumstances", "Обставини")}</dd>
+        </div>
+        <div>
+          <dt>Вихід з ремонту</dt>
+          <dd>${editableInput(item, "repairDate", "Вихід з ремонту")}</dd>
+        </div>
+  `;
+}
+
+function renderMobileItemCard(item, showEditableDetails) {
   return `
     <article class="inventory-item-card row-${item.status}" data-row="${item.rowNumber}">
       <div class="mobile-card-top">
@@ -313,18 +314,7 @@ function renderMobileItemCard(item) {
           <dt>Статус</dt>
           <dd>${statusSelect(item)}</dd>
         </div>
-        <div>
-          <dt>Пошкодження / примітка</dt>
-          <dd>${editableTextArea(item, "damage", "Пошкодження / примітка")}</dd>
-        </div>
-        <div>
-          <dt>Обставини</dt>
-          <dd>${editableTextArea(item, "circumstances", "Обставини")}</dd>
-        </div>
-        <div>
-          <dt>Вихід з ремонту</dt>
-          <dd>${editableInput(item, "repairDate", "Вихід з ремонту")}</dd>
-        </div>
+        ${showEditableDetails ? renderMobileEditableDetails(item) : ""}
       </dl>
     </article>
   `;
@@ -351,21 +341,21 @@ function groupItemsByGroup(items) {
   return groups;
 }
 
-function renderDesktopGroup(group) {
+function renderDesktopGroup(group, showEditableDetails) {
   return `
     <tr class="subgroup-row">
-      <td colspan="8">
+      <td colspan="${showEditableDetails ? 8 : 5}">
         <div class="subgroup-title">
           <span>${escapeHtml(group.name)}</span>
           <strong>${group.items.length}</strong>
         </div>
       </td>
     </tr>
-    ${group.items.map(renderItemRow).join("")}
+    ${group.items.map((item) => renderItemRow(item, showEditableDetails)).join("")}
   `;
 }
 
-function renderMobileGroup(group) {
+function renderMobileGroup(group, showEditableDetails) {
   return `
     <section class="mobile-subgroup">
       <header class="mobile-subgroup-head">
@@ -373,7 +363,7 @@ function renderMobileGroup(group) {
         <strong>${group.items.length}</strong>
       </header>
       <div class="mobile-subgroup-items">
-        ${group.items.map(renderMobileItemCard).join("")}
+        ${group.items.map((item) => renderMobileItemCard(item, showEditableDetails)).join("")}
       </div>
     </section>
   `;
@@ -385,13 +375,22 @@ function renderSectionBlock(section, items) {
   const subtitle = section.isMajor ? "" : status.label;
   const blockKey = sectionKey(section);
   const isCollapsed = state.collapsedSections.has(blockKey);
+  const showEditableDetails = editableDetailStatuses.has(status.key);
+  const tableColumnCount = showEditableDetails ? 8 : 5;
+  const detailHeaders = showEditableDetails
+    ? `
+              <th>Пошкодження / примітка</th>
+              <th>Обставини</th>
+              <th>Вихід з ремонту</th>
+    `
+    : "";
 
   const tableRows = items.length
-    ? items.map(renderItemRow).join("")
-    : `<tr class="status-empty-row"><td colspan="8">Немає записів у цьому блоці.</td></tr>`;
+    ? items.map((item) => renderItemRow(item, showEditableDetails)).join("")
+    : `<tr class="status-empty-row"><td colspan="${tableColumnCount}">Немає записів у цьому блоці.</td></tr>`;
 
   const mobileCards = items.length
-    ? items.map(renderMobileItemCard).join("")
+    ? items.map((item) => renderMobileItemCard(item, showEditableDetails)).join("")
     : `<div class="status-empty-card">Немає записів у цьому блоці.</div>`;
 
   return `
@@ -417,9 +416,7 @@ function renderSectionBlock(section, items) {
               <th>Заводський номер</th>
               <th>К-сть</th>
               <th>Статус</th>
-              <th>Пошкодження / примітка</th>
-              <th>Обставини</th>
-              <th>Вихід з ремонту</th>
+              ${detailHeaders}
             </tr>
           </thead>
           <tbody>${tableRows}</tbody>
@@ -461,12 +458,12 @@ function renderRows() {
 
   nodes.itemsBody.innerHTML = renderedSections
     .join("");
+  resizeEditableTextAreas(nodes.itemsBody);
 }
 
 function render() {
   renderSheetTabs();
   renderStatusTabs();
-  renderStats();
   renderAccessPanel();
   renderRows();
 }
@@ -511,7 +508,7 @@ async function loadItems(allowSheetFallback = true) {
     nodes.authLink.hidden = true;
     state.spreadsheetTitle = payload.spreadsheetTitle || "Google таблиця";
     state.sheets = payload.sheets || [];
-    state.activeSheetId = String(payload.sheetId || state.activeSheetId || "");
+    state.activeSheetId = String(payload.sheetId ?? state.activeSheetId ?? "");
     state.items = payload.items || [];
     state.statuses = payload.statuses || [];
     state.moveTargets = payload.moveTargets || [];
@@ -703,6 +700,11 @@ nodes.itemsBody.addEventListener("change", (event) => {
   const fieldNode = event.target.closest(".editable-field");
   if (!fieldNode) return;
   changeEditableField(Number(fieldNode.dataset.row), fieldNode.dataset.field, fieldNode.value, fieldNode);
+});
+
+nodes.itemsBody.addEventListener("input", (event) => {
+  const fieldNode = event.target.closest("textarea.editable-field");
+  if (fieldNode) resizeEditableTextAreas(fieldNode.parentElement || document);
 });
 
 nodes.itemsBody.addEventListener("click", (event) => {
