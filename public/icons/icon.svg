@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Інтелект">
+  <rect width="512" height="512" rx="112" fill="#090e14"/>
+  <rect x="52" y="52" width="408" height="408" rx="92" fill="#131a23" stroke="#263447" stroke-width="10"/>
+  <circle cx="256" cy="256" r="160" fill="#ff7a1a" opacity="0.18"/>
+  <rect x="126" y="188" width="260" height="136" rx="68" fill="#ff7a1a"/>
+  <text x="256" y="278" fill="#0f1115" font-family="Arial, sans-serif" font-size="72" font-weight="800" text-anchor="middle" letter-spacing="10">ІН</text>
+</svg>

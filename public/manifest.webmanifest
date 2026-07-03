@@ -1,0 +1,21 @@
+{
+  "name": "Корпорація Інтелект - Облік майна",
+  "short_name": "Інтелект",
+  "description": "Облік майна з Google Sheets та керування статусами.",
+  "lang": "uk",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#090e14",
+  "theme_color": "#090e14",
+  "categories": ["productivity", "business"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
