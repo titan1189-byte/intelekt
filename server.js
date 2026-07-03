@@ -28,7 +28,7 @@ const AUTH_STORE_PATH = path.join(DATA_DIR, process.env.AUTH_STORE_FILE || "auth
 const SHEET_ACCESS_PATH = path.join(DATA_DIR, process.env.SHEET_ACCESS_FILE || "sheet-access.json");
 const AUTH_STORE_BACKEND = process.env.AUTH_STORE_BACKEND || (process.env.K_SERVICE ? "firestore" : "file");
 const FIRESTORE_AUTH_DOC = process.env.FIRESTORE_AUTH_DOC || "runtime/authStore";
-const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || (process.env.K_SERVICE ? "__session" : "inventory_session");
+const SESSION_COOKIE = process.env.K_SERVICE ? "__session" : (process.env.SESSION_COOKIE_NAME || "inventory_session");
 const SESSION_COOKIE_DOMAIN = process.env.SESSION_COOKIE_DOMAIN || "";
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 168) * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -150,7 +150,13 @@ function parseCookies(request) {
 }
 
 function cookieOptions(request) {
-  const isHttps = request.headers["x-forwarded-proto"] === "https" || request.socket.encrypted;
+  const forwardedProto = String(request.headers["x-forwarded-proto"] || "");
+  const host = String(request.headers.host || "");
+  const isHttps = forwardedProto.split(",").map((value) => value.trim()).includes("https")
+    || Boolean(request.socket.encrypted)
+    || host.endsWith(".web.app")
+    || host.endsWith(".firebaseapp.com")
+    || Boolean(process.env.K_SERVICE);
   return [
     "HttpOnly",
     "Path=/",
@@ -174,6 +180,24 @@ function setSessionCookie(response, request, sessionId) {
 
 function clearSessionCookie(response) {
   response.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+}
+
+function publicAppOrigin() {
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  if (!redirectUri) return "";
+
+  try {
+    const url = new URL(redirectUri);
+    return url.protocol === "https:" ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function publicRedirectLocation(returnTo) {
+  const origin = publicAppOrigin();
+  if (!origin || !String(returnTo || "").startsWith("/")) return returnTo || "/";
+  return `${origin}${returnTo}`;
 }
 
 function cleanupAuthStore(store) {
@@ -980,6 +1004,17 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
     const cellAddress = `${columnLetter(STATUS_COLUMN_INDEX)}${rowNumber}`;
     const range = `${sheetName}!${cellAddress}`;
 
+    console.info(JSON.stringify({
+      area: "sheets",
+      event: "status-same-section-start",
+      sheetId: selectedSheet.id,
+      sheetTitle: selectedSheet.title,
+      rowNumber,
+      target: target.statusKey,
+      targetValue: target.sheetValue,
+      range
+    }));
+
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range,
@@ -988,6 +1023,15 @@ async function updateStatus(request, rowNumber, statusTarget, requestedSheetId) 
         values: [[target.sheetValue]]
       }
     });
+
+    console.info(JSON.stringify({
+      area: "sheets",
+      event: "status-same-section-finished",
+      sheetId: selectedSheet.id,
+      rowNumber,
+      target: target.statusKey,
+      range
+    }));
 
     return {
       rowNumber,
@@ -1218,6 +1262,24 @@ function sendStatic(response, urlPath) {
 }
 
 function readBody(request) {
+  if (request.body && typeof request.body === "object" && !Buffer.isBuffer(request.body)) {
+    return Promise.resolve(request.body);
+  }
+
+  const bufferedBody = request.rawBody || (Buffer.isBuffer(request.body) ? request.body : null);
+  if (bufferedBody) {
+    try {
+      const text = Buffer.from(bufferedBody).toString("utf8");
+      return Promise.resolve(text ? JSON.parse(text) : {});
+    } catch {
+      return Promise.reject(new Error("Некоректний JSON."));
+    }
+  }
+
+  if (request.readableEnded || request.complete) {
+    return Promise.resolve({});
+  }
+
   return new Promise((resolve, reject) => {
     let body = "";
 
@@ -1284,7 +1346,7 @@ async function requestHandler(request, response) {
       const state = url.searchParams.get("state");
       if (!code) throw new Error("Google не повернув authorization code.");
       const returnTo = await createUserSession(request, response, code, state);
-      response.writeHead(302, { Location: returnTo });
+      response.writeHead(302, { Location: publicRedirectLocation(returnTo) });
       response.end();
     } catch (error) {
       sendError(response, error);
@@ -1356,6 +1418,15 @@ async function requestHandler(request, response) {
   if (url.pathname === "/api/status" && request.method === "PATCH") {
     try {
       const body = await readBody(request);
+      const user = await currentUser(request);
+      console.info(JSON.stringify({
+        area: "sheets",
+        event: "status-request",
+        email: user?.email || "",
+        sheetId: body.sheetId || "",
+        rowNumber: Number(body.rowNumber),
+        status: body.status || ""
+      }));
       sendJson(response, 200, await updateStatus(request, Number(body.rowNumber), body.status, body.sheetId));
     } catch (error) {
       sendError(response, error, 400);
