@@ -36,13 +36,24 @@ const SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/spreadsheets",
-  "https://www.googleapis.com/auth/script.scriptapp"
+  "https://www.googleapis.com/auth/spreadsheets"
 ];
 
 const SHEET_RANGE = process.env.GOOGLE_SHEET_RANGE || "A1:I1000";
 const HIDE_NON_EDITABLE_SHEETS = process.env.HIDE_NON_EDITABLE_SHEETS !== "false";
-const REPORT_FUNCTION_PREFIX = process.env.REPORT_FUNCTION_PREFIX || "\u043d\u0430\u0434\u0456\u0441\u043b\u0430\u0442\u0438\u0417\u0432\u0456\u0442_";
+const REPORT_SUMMARY_SHEET = process.env.REPORT_SUMMARY_SHEET || "\u0417\u0432\u0435\u0434\u0435\u043d\u0430 \u0456\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0456\u044f";
+const REPORT_SUMMARY_FIRST_ROW = Number(process.env.REPORT_SUMMARY_FIRST_ROW || 3);
+const REPORT_PERIOD_CELL = process.env.REPORT_PERIOD_CELL || "F1";
+const REPORT_UNIT_SUMMARY_COLUMNS = process.env.REPORT_UNIT_SUMMARY_COLUMNS
+  ? JSON.parse(process.env.REPORT_UNIT_SUMMARY_COLUMNS)
+  : {
+      "1 \u0420\u0411\u043f\u0410\u041a": 1,
+      "1 \u0420\u0423\u0411\u043f\u0410\u041a": 5,
+      "2 \u0420\u0411\u043f\u0410\u041a": 9,
+      "\u041d\u0420\u041a": 13,
+      "2 \u0420\u0423\u0411\u043f\u0410\u041a": 17,
+      "\u0413\u0440\u0435\u043a": 21
+    };
 const STATUS_COLUMN_INDEX = 5;
 const EDITABLE_FIELD_COLUMNS = {
   damage: 6,
@@ -413,11 +424,6 @@ async function sheetsClient(request) {
   return google.sheets({ version: "v4", auth });
 }
 
-async function appsScriptClient(request) {
-  const auth = await authClient(request);
-  return google.script({ version: "v1", auth });
-}
-
 async function currentUser(request) {
   const { sessionId, session, store } = await currentSession(request);
   if (!session?.userId) {
@@ -677,18 +683,82 @@ function statusByKeyStrict(key) {
   return STATUSES.find((status) => status.key === key) || null;
 }
 
-function appsScriptFunctionSuffix(sheetTitle) {
-  return clean(sheetTitle)
-    .replace(/\s+/g, "")
-    .replace(/[^\p{L}\p{N}_]/gu, "");
+function reportSummaryStartColumn(sheetTitle) {
+  const configured = REPORT_UNIT_SUMMARY_COLUMNS[sheetTitle];
+  if (!configured) throw new Error(`Не налаштовано колонку зведення для аркуша: ${sheetTitle}`);
+  const startColumn = Number(configured);
+  if (!Number.isInteger(startColumn) || startColumn < 1) {
+    throw new Error(`Некоректна колонка зведення для аркуша: ${sheetTitle}`);
+  }
+  return startColumn - 1;
 }
 
-function reportFunctionName(sheetTitle) {
-  const map = process.env.REPORT_FUNCTION_MAP
-    ? JSON.parse(process.env.REPORT_FUNCTION_MAP)
-    : null;
-  if (map && map[sheetTitle]) return map[sheetTitle];
-  return `${REPORT_FUNCTION_PREFIX}${appsScriptFunctionSuffix(sheetTitle)}`;
+function reportDate(value = new Date()) {
+  const formatter = new Intl.DateTimeFormat("uk-UA", {
+    timeZone: process.env.REPORT_TIME_ZONE || "Europe/Kyiv",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  });
+  return formatter.format(value).replace(/\//g, ".");
+}
+
+function buildWhatsappReportText(sheetTitle, period, summaryRows) {
+  const icons = {
+    "\u0421\u043f\u0440\u0430\u0432\u043d\u0456 \u0437\u0430\u0441\u043e\u0431\u0438": "[+]",
+    "\u0420\u0435\u043c\u043e\u043d\u0442": "[P]",
+    "\u041f\u043e\u0448\u043a\u043e\u0434\u0436\u0435\u043d\u0456 \u043d\u0430 \u043f\u043e\u0437\u0438\u0446\u0456\u0457": "[!]",
+    "\u0412\u0442\u0440\u0430\u0447\u0435\u043d\u043e": "[X]"
+  };
+
+  const sections = [];
+  let currentSection = null;
+
+  summaryRows.forEach((row) => {
+    const sectionName = clean(row[0]);
+    const itemName = clean(row[1]);
+    if (sectionName && !itemName) {
+      currentSection = { name: sectionName, items: [], total: 0 };
+      sections.push(currentSection);
+      return;
+    }
+
+    if (!currentSection || !itemName) return;
+    const qty = Number(String(row[2] || "").replace(",", ".")) || 0;
+    currentSection.items.push({ name: itemName, qty });
+    currentSection.total += qty;
+  });
+
+  if (!sections.length) throw new Error(`Зведена порожня для ${sheetTitle}`);
+
+  const dateLine = period ? `${reportDate()} (${period})` : reportDate();
+  const lines = [
+    `=== Звіт ${sheetTitle} ===`,
+    dateLine,
+    "-----------------"
+  ];
+
+  sections.forEach((section) => {
+    lines.push("", `${icons[section.name] || "-"} ${section.name}:`);
+    if (!section.items.length) {
+      lines.push("  - немає -");
+      return;
+    }
+
+    section.items.forEach((item) => {
+      lines.push(`  - ${item.name} - ${item.qty} шт`);
+    });
+    lines.push(`  Разом: ${section.total} шт`);
+  });
+
+  lines.push(
+    "",
+    "-----------------",
+    "",
+    "Всі права захищені. Корпорація Інтелект. Думаємо за вас."
+  );
+
+  return lines.join("\n");
 }
 
 function majorStatusForLabel(label) {
@@ -1236,43 +1306,33 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
 }
 
 async function sendReport(request, requestedSheetId) {
-  const scriptId = requiredEnv("GOOGLE_APPS_SCRIPT_ID");
   const sheets = await sheetsClient(request);
   const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
-  const functionName = reportFunctionName(selectedSheet.title);
-  const script = await appsScriptClient(request);
+  const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
+  const summaryStartColumn = reportSummaryStartColumn(selectedSheet.title);
+  const summaryEndColumn = summaryStartColumn + 2;
+  const summaryRange = `${quoteSheetName(REPORT_SUMMARY_SHEET)}!${columnLetter(summaryStartColumn)}${REPORT_SUMMARY_FIRST_ROW}:${columnLetter(summaryEndColumn)}1000`;
+  const periodRange = `${quoteSheetName(selectedSheet.title)}!${REPORT_PERIOD_CELL}`;
 
-  const response = await script.scripts.run({
-    scriptId,
-    requestBody: {
-      function: functionName,
-      parameters: [],
-      devMode: process.env.GOOGLE_APPS_SCRIPT_DEV_MODE === "true"
-    }
+  const response = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId,
+    ranges: [summaryRange, periodRange],
+    valueRenderOption: "FORMATTED_VALUE"
   });
 
-  if (response.data.error) {
-    const details = response.data.error.details || [];
-    const scriptMessage = details
-      .map((detail) => detail.errorMessage || detail.message)
-      .filter(Boolean)
-      .join(" ");
-    throw new Error(scriptMessage || response.data.error.message || `Apps Script function failed: ${functionName}`);
-  }
-
-  const result = response.data.response?.result;
-  const whatsappUrl = typeof result === "string"
-    ? result
-    : result?.url || result?.whatsappUrl || result?.link || "";
+  const [summaryValueRange, periodValueRange] = response.data.valueRanges || [];
+  const summaryRows = summaryValueRange?.values || [];
+  const period = clean(periodValueRange?.values?.[0]?.[0]);
+  const text = buildWhatsappReportText(selectedSheet.title, period, summaryRows);
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
 
   return {
     sheetId: selectedSheet.id,
     sheetTitle: selectedSheet.title,
-    functionName,
-    result: result ?? null,
-    whatsappUrl
+    whatsappUrl,
+    text
   };
 }
 
