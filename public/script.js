@@ -17,7 +17,9 @@ const state = {
   spreadsheetTitle: "",
   sheets: [],
   activeSheetId: new URLSearchParams(window.location.search).get("sheetId") || "",
+  viewType: "inventory",
   items: [],
+  summary: null,
   statuses: [],
   moveTargets: [],
   accessInfo: null,
@@ -143,6 +145,12 @@ function renderSheetTabs() {
 }
 
 function renderStatusTabs() {
+  nodes.statusTabs.hidden = state.viewType === "summary";
+  if (nodes.statusTabs.hidden) {
+    nodes.statusTabs.innerHTML = "";
+    return;
+  }
+
   const counts = countsByStatus();
   const tabs = [{ key: "all", label: "Усі" }, ...state.statuses];
 
@@ -241,6 +249,20 @@ function isSectionCollapsed(blockKey) {
   return false;
 }
 
+function isOrangeStockGroup(item) {
+  const group = normalize(item.group);
+  const stockMeta = statusMeta("stock");
+  return item.status === "stock"
+    && group
+    && group !== normalize(stockMeta.label)
+    && group !== normalize(stockMeta.sheetValue);
+}
+
+function isHighlightedStockGroup(item) {
+  const group = normalize(item.group);
+  return item.status === "stock" && (group === "тз ямайка" || group === "тз гаїті");
+}
+
 function editableTextArea(item, field, label) {
   return `
     <textarea class="editable-field" data-row="${item.rowNumber}" data-field="${field}" aria-label="${escapeHtml(label)}">${escapeHtml(item[field])}</textarea>
@@ -269,8 +291,10 @@ function renderEditableDetailCells(item) {
 }
 
 function renderItemRow(item, showEditableDetails) {
+  const highlightClass = isOrangeStockGroup(item) ? " highlight-stock-group" : "";
+
   return `
-    <tr class="row-${item.status}" data-row="${item.rowNumber}">
+    <tr class="row-${item.status}${highlightClass}" data-row="${item.rowNumber}">
       <td class="number-cell">
         <strong>${escapeHtml(item.displayNumber || item.rowNumber)}</strong>
         <span>${escapeHtml(item.group)}</span>
@@ -302,8 +326,10 @@ function renderMobileEditableDetails(item) {
 }
 
 function renderMobileItemCard(item, showEditableDetails) {
+  const highlightClass = isOrangeStockGroup(item) ? " highlight-stock-group" : "";
+
   return `
-    <article class="inventory-item-card row-${item.status}" data-row="${item.rowNumber}">
+    <article class="inventory-item-card row-${item.status}${highlightClass}" data-row="${item.rowNumber}">
       <div class="mobile-card-top">
         <div>
           <span class="mobile-number">№ ${escapeHtml(item.displayNumber || item.rowNumber)}</span>
@@ -389,6 +415,7 @@ function renderSectionBlock(section, items) {
   const blockKey = sectionKey(section);
   const isCollapsed = isSectionCollapsed(blockKey);
   const showEditableDetails = editableDetailStatuses.has(status.key);
+  const stockSubsectionClass = status.key === "stock" && !section.isMajor ? " stock-subsection" : "";
   const tableColumnCount = showEditableDetails ? 8 : 5;
   const detailHeaders = showEditableDetails
     ? `
@@ -407,7 +434,7 @@ function renderSectionBlock(section, items) {
     : `<div class="status-empty-card">Немає записів у цьому блоці.</div>`;
 
   return `
-    <section class="status-section tone-${status.key}" data-section-key="${escapeHtml(blockKey)}" data-collapsed="${isCollapsed}">
+    <section class="status-section tone-${status.key}${stockSubsectionClass}" data-section-key="${escapeHtml(blockKey)}" data-collapsed="${isCollapsed}">
       <header class="status-section-head">
         <div class="status-section-title">
           <span>${escapeHtml(sectionTitle)}</span>
@@ -440,7 +467,67 @@ function renderSectionBlock(section, items) {
   `;
 }
 
+function renderSummarySection(section) {
+  const rows = section.items.length
+    ? section.items.map((item) => `
+        <tr>
+          <td>${escapeHtml(item.number)}</td>
+          <td>${escapeHtml(item.name)}</td>
+          <td>${escapeHtml(item.quantity)}</td>
+        </tr>
+      `).join("")
+    : `<tr class="summary-empty-row"><td colspan="3">Немає записів</td></tr>`;
+
+  return `
+    <section class="summary-category tone-${escapeHtml(section.key)}">
+      <header class="summary-category-head">
+        <span>${escapeHtml(section.label)}</span>
+        <strong>${escapeHtml(section.total || "")}</strong>
+      </header>
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>№</th>
+            <th>Назва майна</th>
+            <th>Кількість</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderSummaryUnit(unit, index) {
+  return `
+    <article class="summary-unit tone-${index % 6}">
+      <header class="summary-unit-head">
+        <h3>${escapeHtml(unit.title)}</h3>
+      </header>
+      <div class="summary-categories">
+        ${(unit.sections || []).map(renderSummarySection).join("") || `<div class="summary-empty-card">Немає даних</div>`}
+      </div>
+    </article>
+  `;
+}
+
+function renderSummaryRows() {
+  const units = state.summary?.units || [];
+  nodes.emptyState.hidden = units.length > 0;
+  nodes.resultCount.textContent = `${units.length} ${units.length === 1 ? "підрозділ" : "підрозділів"}`;
+  nodes.itemsBody.innerHTML = `
+    <section class="summary-board">
+      ${units.map(renderSummaryUnit).join("")}
+    </section>
+  `;
+}
+
 function renderRows() {
+  if (state.viewType === "summary") {
+    renderSummaryRows();
+    return;
+  }
+
   const items = filteredItems();
   nodes.emptyState.hidden = items.length > 0;
   nodes.resultCount.textContent = `${items.length} ${items.length === 1 ? "запис" : "записів"}`;
@@ -522,7 +609,9 @@ async function loadItems(allowSheetFallback = true) {
     state.spreadsheetTitle = payload.spreadsheetTitle || "Google таблиця";
     state.sheets = payload.sheets || [];
     state.activeSheetId = String(payload.sheetId ?? state.activeSheetId ?? "");
+    state.viewType = payload.viewType || "inventory";
     state.items = payload.items || [];
+    state.summary = payload.summary || null;
     state.statuses = payload.statuses || [];
     state.moveTargets = payload.moveTargets || [];
     nodes.sheetTitle.textContent = `${state.spreadsheetTitle} / ${payload.sheetTitle || "Аркуш"}`;

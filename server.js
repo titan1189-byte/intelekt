@@ -40,6 +40,7 @@ const SCOPES = [
 ];
 
 const SHEET_RANGE = process.env.GOOGLE_SHEET_RANGE || "A1:I1000";
+const SUMMARY_SHEET_RANGE = process.env.GOOGLE_SUMMARY_SHEET_RANGE || "A1:Z120";
 const HIDE_NON_EDITABLE_SHEETS = process.env.HIDE_NON_EDITABLE_SHEETS !== "false";
 const REPORT_SUMMARY_SHEET = process.env.REPORT_SUMMARY_SHEET || "\u0417\u0432\u0435\u0434\u0435\u043d\u0430 \u0456\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0456\u044f";
 const REPORT_SUMMARY_FIRST_ROW = Number(process.env.REPORT_SUMMARY_FIRST_ROW || 3);
@@ -755,7 +756,7 @@ function buildWhatsappReportText(sheetTitle, period, summaryRows) {
     "",
     "-----------------",
     "",
-    "Всі права захищені. Корпорація Інтелект. Думаємо за вас."
+    "© 2026 Корпорація Інтелект. Всі права захищені."
   );
 
   return lines.join("\n");
@@ -1024,6 +1025,163 @@ function parseInventory(rows) {
   return items;
 }
 
+function formattedRows(rows) {
+  return rows.map((row) => (row.values || []).map((item) => clean(item?.formattedValue)));
+}
+
+function isSummarySheetTitle(title) {
+  return norm(title).includes(norm(REPORT_SUMMARY_SHEET));
+}
+
+function summaryCategory(label) {
+  const value = norm(label);
+  if (!value) return null;
+  if (value.includes("справн")) return { key: "stock", label: "Справні засоби" };
+  if (value.includes("пошкоджен")) return { key: "damaged", label: "Пошкоджені на позиції" };
+  if (value.includes("ремонт")) return { key: "repair", label: "Ремонт" };
+  if (value.includes("втрачен")) return { key: "lost", label: "Втрачено" };
+  return null;
+}
+
+function parseSummaryNumber(value) {
+  const normalized = String(value || "").replace(/\s+/g, "").replace(",", ".");
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function isSummaryHeader(values, rowIndex, startColumn) {
+  const row = values[rowIndex] || [];
+  const numberHeader = norm(row[startColumn]);
+  return (numberHeader.includes("№") || numberHeader === "no" || numberHeader === "#")
+    && norm(row[startColumn + 1]).includes("назва")
+    && norm(row[startColumn + 2]).includes("кіль");
+}
+
+function findSummaryHeader(values, titleRow, titleColumn) {
+  for (let startColumn = Math.max(0, titleColumn - 2); startColumn <= titleColumn + 1; startColumn += 1) {
+    for (let rowIndex = titleRow + 1; rowIndex <= titleRow + 4 && rowIndex < values.length; rowIndex += 1) {
+      if (isSummaryHeader(values, rowIndex, startColumn)) {
+        return { rowIndex, startColumn };
+      }
+    }
+  }
+
+  return null;
+}
+
+function summaryTitleFromHeader(title) {
+  return clean(title).replace(/^Зведена інформація\s*/i, "") || clean(title);
+}
+
+function summaryTitleFromColumn(startColumn) {
+  const match = Object.entries(REPORT_UNIT_SUMMARY_COLUMNS)
+    .find(([, column]) => Number(column) - 1 === startColumn);
+  return match?.[0] || `Блок ${startColumn + 1}`;
+}
+
+function findSummaryTitleNearHeader(values, headerRow, startColumn) {
+  for (let rowIndex = Math.max(0, headerRow - 4); rowIndex < headerRow; rowIndex += 1) {
+    const row = values[rowIndex] || [];
+    for (let columnIndex = startColumn; columnIndex <= startColumn + 2; columnIndex += 1) {
+      const value = clean(row[columnIndex]);
+      if (!value || value === "\\") continue;
+      if (isSummarySheetTitle(value)) return summaryTitleFromHeader(value);
+    }
+  }
+
+  return summaryTitleFromColumn(startColumn);
+}
+
+function findSummaryHeaderInColumn(values, startColumn) {
+  for (let rowIndex = 0; rowIndex < Math.min(values.length, 12); rowIndex += 1) {
+    if (isSummaryHeader(values, rowIndex, startColumn)) {
+      return { rowIndex, startColumn };
+    }
+  }
+
+  return null;
+}
+
+function findSummaryBlocks(values) {
+  const blocks = [];
+  const seen = new Set();
+
+  Object.entries(REPORT_UNIT_SUMMARY_COLUMNS).forEach(([title, column]) => {
+    const startColumn = Number(column) - 1;
+    if (!Number.isInteger(startColumn) || startColumn < 0 || seen.has(startColumn)) return;
+
+    const header = findSummaryHeaderInColumn(values, startColumn);
+    if (!header) return;
+
+    seen.add(startColumn);
+    blocks.push({
+      title,
+      startColumn,
+      headerRow: header.rowIndex
+    });
+  });
+
+  values.forEach((row, rowIndex) => {
+    row.forEach((_, columnIndex) => {
+      if (!isSummaryHeader(values, rowIndex, columnIndex) || seen.has(columnIndex)) return;
+      seen.add(columnIndex);
+      blocks.push({
+        title: findSummaryTitleNearHeader(values, rowIndex, columnIndex),
+        startColumn: columnIndex,
+        headerRow: rowIndex
+      });
+    });
+  });
+
+  return blocks.sort((left, right) => left.startColumn - right.startColumn);
+}
+
+function parseSummarySheet(rows) {
+  const values = formattedRows(rows);
+  const blocks = findSummaryBlocks(values);
+
+  return {
+    units: blocks.map((block) => {
+      const sections = [];
+      let currentSection = null;
+
+      for (let rowIndex = block.headerRow + 1; rowIndex < values.length; rowIndex += 1) {
+        const row = values[rowIndex] || [];
+        const number = clean(row[block.startColumn]);
+        const name = clean(row[block.startColumn + 1]);
+        const quantityRaw = clean(row[block.startColumn + 2]);
+
+        if (!number && !name && !quantityRaw) continue;
+
+        const category = summaryCategory(name || number);
+        if (category) {
+          currentSection = {
+            key: category.key,
+            label: category.label,
+            total: parseSummaryNumber(quantityRaw),
+            items: []
+          };
+          sections.push(currentSection);
+          continue;
+        }
+
+        if (!currentSection || !name || norm(name).includes("назва майна")) continue;
+        currentSection.items.push({
+          number,
+          name,
+          quantity: quantityRaw,
+          quantityValue: parseSummaryNumber(quantityRaw)
+        });
+      }
+
+      return {
+        title: block.title,
+        sections
+      };
+    })
+  };
+}
+
 async function listSheets(request) {
   const sheets = await sheetsClient(request);
   const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
@@ -1068,7 +1226,8 @@ async function readInventory(request, requestedSheetId) {
   ensureSheetAccess(meta, requestedSheetId);
   const selectedSheet = pickSheet(meta, requestedSheetId);
   const spreadsheetId = requiredEnv("GOOGLE_SHEET_ID");
-  const range = `${quoteSheetName(selectedSheet.title)}!${SHEET_RANGE}`;
+  const isSummarySheet = isSummarySheetTitle(selectedSheet.title);
+  const range = `${quoteSheetName(selectedSheet.title)}!${isSummarySheet ? SUMMARY_SHEET_RANGE : SHEET_RANGE}`;
 
   const response = await sheets.spreadsheets.get({
     spreadsheetId,
@@ -1078,16 +1237,19 @@ async function readInventory(request, requestedSheetId) {
   });
 
   const rows = response.data.sheets?.[0]?.data?.[0]?.rowData || [];
+  const summary = isSummarySheet ? parseSummarySheet(rows) : null;
 
   return {
     spreadsheetTitle: meta.spreadsheetTitle,
     sheetId: selectedSheet.id,
     sheetTitle: selectedSheet.title,
     sheets: meta.sheets,
+    viewType: isSummarySheet ? "summary" : "inventory",
+    summary,
     updatedAt: new Date().toISOString(),
     statuses: STATUSES,
-    moveTargets: buildMoveTargets(rows.map((row) => (row.values || []).map((cell) => cell.formattedValue || ""))),
-    items: parseInventory(rows)
+    moveTargets: isSummarySheet ? [] : buildMoveTargets(formattedRows(rows)),
+    items: isSummarySheet ? [] : parseInventory(rows)
   };
 }
 
