@@ -336,7 +336,11 @@ async function createUserSession(request, response, code, state) {
   });
 
   const pending = store.pendingStates[state];
-  if (!state || !pending) throw new Error("OAuth сесія застаріла. Спробуйте увійти ще раз.");
+  if (!state || !pending) {
+    const error = new Error("OAuth сесія застаріла. Перезапускаємо вхід через Google.");
+    error.code = "OAUTH_STATE_EXPIRED";
+    throw error;
+  }
   delete store.pendingStates[state];
 
   const client = oauthClient();
@@ -1623,6 +1627,11 @@ async function requestHandler(request, response) {
       response.writeHead(302, { Location: publicRedirectLocation(returnTo) });
       response.end();
     } catch (error) {
+      if (error.code === "OAUTH_STATE_EXPIRED") {
+        response.writeHead(302, { Location: "/auth/google" });
+        response.end();
+        return;
+      }
       sendError(response, error);
     }
     return;

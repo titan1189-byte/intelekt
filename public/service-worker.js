@@ -1,9 +1,9 @@
-const CACHE_NAME = "intelekt-shell-v11";
+const CACHE_NAME = "intelekt-shell-v12";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=20260706-footer-year-2025",
-  "/script.js?v=20260706-footer-year-2025",
+  "/styles.css?v=20260713-stock-auth-fix",
+  "/script.js?v=20260713-stock-auth-fix",
   "/manifest.webmanifest",
   "/icons/icon.svg"
 ];

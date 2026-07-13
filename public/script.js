@@ -100,6 +100,7 @@ function countsByStatus() {
   return state.items.reduce(
     (counts, item) => {
       counts.all += 1;
+      if (item.status === "stock" && !isPrimaryStockItem(item)) return counts;
       counts[item.status] = (counts[item.status] || 0) + 1;
       return counts;
     },
@@ -111,7 +112,11 @@ function filteredItems() {
   const query = normalize(state.query);
 
   return state.items
-    .filter((item) => state.activeStatus === "all" || item.status === state.activeStatus)
+    .filter((item) => {
+      if (state.activeStatus === "all") return true;
+      if (state.activeStatus === "stock") return isPrimaryStockItem(item);
+      return item.status === state.activeStatus;
+    })
     .filter((item) => {
       if (!query) return true;
       return normalize([
@@ -236,7 +241,7 @@ function sectionMatchesItem(section, item) {
 
   return normalize(item.group) === sectionValue
     || normalize(item.statusRaw) === sectionValue
-    || (isFallbackMajorSection && item.status === section.statusKey);
+    || (isFallbackMajorSection && (section.statusKey === "stock" ? isPrimaryStockItem(item) : item.status === section.statusKey));
 }
 
 function sectionKey(section) {
@@ -256,6 +261,17 @@ function isOrangeStockGroup(item) {
     && group
     && group !== normalize(stockMeta.label)
     && group !== normalize(stockMeta.sheetValue);
+}
+
+function isPrimaryStockItem(item) {
+  if (item.status !== "stock") return false;
+  const group = normalize(item.group);
+  const raw = normalize(item.statusRaw);
+  const stockMeta = statusMeta("stock");
+  return group === normalize(stockMeta.label)
+    || group === normalize(stockMeta.sheetValue)
+    || raw === normalize(stockMeta.label)
+    || raw === normalize(stockMeta.sheetValue);
 }
 
 function isHighlightedStockGroup(item) {
@@ -411,7 +427,7 @@ function renderMobileGroup(group, showEditableDetails) {
 function renderSectionBlock(section, items) {
   const status = statusMeta(section.statusKey || section.key);
   const sectionTitle = section.label || section.sheetValue || status.label;
-  const subtitle = section.isMajor ? "" : status.label;
+  const subtitle = section.isMajor || status.key === "stock" ? "" : status.label;
   const blockKey = sectionKey(section);
   const isCollapsed = isSectionCollapsed(blockKey);
   const showEditableDetails = editableDetailStatuses.has(status.key);
@@ -535,7 +551,12 @@ function renderRows() {
   const sections = sectionTargets();
   const visibleSections = state.activeStatus === "all"
     ? sections
-    : sections.filter((section) => section.statusKey === state.activeStatus || section.key === state.activeStatus);
+    : sections.filter((section) => {
+      if (state.activeStatus === "stock") {
+        return (section.statusKey === "stock" || section.key === "stock") && section.isMajor;
+      }
+      return section.statusKey === state.activeStatus || section.key === state.activeStatus;
+    });
 
   const knownItems = new Set();
   const renderedSections = visibleSections
