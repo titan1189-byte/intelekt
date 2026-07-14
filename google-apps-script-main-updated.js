@@ -463,19 +463,19 @@ function запитатиПеріодЗвіту_(defaultPeriod) {
 
 function сформуватиТекстWhatsAppЗвіту_(unitName, period, sections) {
   const labels = {
-    'Справні засоби': '✅ НА СКЛАДІ / СПРАВНІ',
-    'Ремонт': '🛠 РЕМОНТ',
-    'Пошкоджені на позиції': '⚠️ ПОШКОДЖЕНІ НА ПОЗИЦІЇ',
-    'Втрачено': '❌ ВТРАЧЕНО',
+    'Справні засоби': '[СКЛАД] НА СКЛАДІ / СПРАВНІ',
+    'Ремонт': '[РЕМОНТ] РЕМОНТ',
+    'Пошкоджені на позиції': '[ПОШКОДЖЕНО] ПОШКОДЖЕНІ НА ПОЗИЦІЇ',
+    'Втрачено': '[ВТРАЧЕНО] ВТРАЧЕНО',
   };
 
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy');
   const dateLine = period ? today + ', ' + period : today;
   const lines = [
-    '📋 ЗВІТ: ' + unitName,
-    '🕒 Період: ' + dateLine,
+    'ЗВІТ: ' + unitName,
+    'Період: ' + dateLine,
     '',
-    '━━━━━━━━━━━━━━━━',
+    '====================',
   ];
 
   for (const section of sections) {
@@ -494,7 +494,7 @@ function сформуватиТекстWhatsAppЗвіту_(unitName, period, sec
 
   lines.push(
     '',
-    '━━━━━━━━━━━━━━━━',
+    '====================',
     '',
     '© 2025 Корпорація Інтелект. Всі права захищені.'
   );
