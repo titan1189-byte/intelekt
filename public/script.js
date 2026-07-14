@@ -4,6 +4,11 @@ const nodes = {
   authLink: document.getElementById("auth-link"),
   reportButton: document.getElementById("report-button"),
   accessPanel: document.getElementById("access-panel"),
+  reportDialog: document.getElementById("report-dialog"),
+  reportForm: document.getElementById("report-form"),
+  reportPeriodInput: document.getElementById("report-period-input"),
+  reportCancel: document.getElementById("report-cancel"),
+  reportCancelTop: document.getElementById("report-cancel-top"),
   searchInput: document.getElementById("search-input"),
   refreshButton: document.getElementById("refresh-button"),
   sheetTabs: document.getElementById("sheet-tabs"),
@@ -27,6 +32,7 @@ const state = {
   query: "",
   loading: false,
   reporting: false,
+  periodDialogResolve: null,
   collapsedSections: new Set(),
   expandedMobileSections: new Set()
 };
@@ -760,8 +766,48 @@ async function changeEditableField(rowNumber, field, nextValue, inputNode) {
   }
 }
 
+function closeReportPeriodDialog(value = null) {
+  if (!nodes.reportDialog) return;
+  nodes.reportDialog.hidden = true;
+  document.body.classList.remove("modal-open");
+
+  const resolve = state.periodDialogResolve;
+  state.periodDialogResolve = null;
+  if (resolve) resolve(value);
+}
+
+function openReportPeriodDialog() {
+  const fallbackPeriod = localStorage.getItem("lastReportPeriod") || "";
+  if (!nodes.reportDialog || !nodes.reportPeriodInput) {
+    const value = window.prompt("Вкажіть період звіту", fallbackPeriod);
+    return Promise.resolve(value === null ? null : value.trim());
+  }
+
+  nodes.reportPeriodInput.value = fallbackPeriod;
+  nodes.reportDialog.hidden = false;
+  document.body.classList.add("modal-open");
+  requestAnimationFrame(() => {
+    nodes.reportPeriodInput.focus();
+    nodes.reportPeriodInput.select();
+  });
+
+  return new Promise((resolve) => {
+    state.periodDialogResolve = resolve;
+  });
+}
+
 async function sendReport() {
   if (state.reporting || state.loading) return;
+  const period = await openReportPeriodDialog();
+  if (period === null) return;
+
+  const normalizedPeriod = period.trim();
+  if (!normalizedPeriod) {
+    setSync("Вкажіть період звіту, наприклад 16:00-09:00.", true);
+    return;
+  }
+
+  localStorage.setItem("lastReportPeriod", normalizedPeriod);
   state.reporting = true;
   nodes.reportButton.disabled = true;
   setSync("Формування звіту для WhatsApp...");
@@ -771,7 +817,8 @@ async function sendReport() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sheetId: state.activeSheetId
+        sheetId: state.activeSheetId,
+        period: normalizedPeriod
       })
     });
     const payload = await readJsonResponse(response);
@@ -863,6 +910,30 @@ mobileCollapseQuery.addEventListener("change", renderRows);
 
 nodes.refreshButton.addEventListener("click", loadItems);
 nodes.reportButton.addEventListener("click", sendReport);
+
+if (nodes.reportForm) {
+  nodes.reportForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeReportPeriodDialog(nodes.reportPeriodInput.value.trim());
+  });
+}
+
+[nodes.reportCancel, nodes.reportCancelTop].forEach((button) => {
+  if (!button) return;
+  button.addEventListener("click", () => closeReportPeriodDialog(null));
+});
+
+if (nodes.reportDialog) {
+  nodes.reportDialog.addEventListener("click", (event) => {
+    if (event.target === nodes.reportDialog) closeReportPeriodDialog(null);
+  });
+}
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && nodes.reportDialog && !nodes.reportDialog.hidden) {
+    closeReportPeriodDialog(null);
+  }
+});
 
 window.addEventListener("popstate", () => {
   const params = new URLSearchParams(window.location.search);

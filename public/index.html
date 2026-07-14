@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=20260713-stock-auth-fix">
+  <link rel="stylesheet" href="/styles.css?v=20260714-report-period">
 </head>
 <body>
   <div class="brand-bar" aria-label="Корпорація Інтелект">
@@ -69,11 +69,31 @@
     </section>
   </main>
 
+  <div id="report-dialog" class="modal-backdrop" hidden>
+    <form id="report-form" class="report-dialog" autocomplete="off">
+      <div class="report-dialog-head">
+        <div>
+          <span>WhatsApp звіт</span>
+          <h2>Період звіту</h2>
+        </div>
+        <button id="report-cancel-top" class="dialog-close" type="button" aria-label="Закрити">×</button>
+      </div>
+      <label class="report-period-field">
+        <span>Вкажіть час, який буде в звіті</span>
+        <input id="report-period-input" type="text" inputmode="text" placeholder="16:00-09:00" required>
+      </label>
+      <div class="report-dialog-actions">
+        <button id="report-cancel" class="secondary-button" type="button">Скасувати</button>
+        <button class="primary-button" type="submit">Відправити</button>
+      </div>
+    </form>
+  </div>
+
   <footer class="app-footer">
     <p>© 2025 Корпорація Інтелект. Всі права захищені.</p>
     <p>З питань звертайтеся: <a href="mailto:intellect@example.com">intellect@example.com</a></p>
   </footer>
 
-  <script src="/script.js?v=20260713-stock-auth-fix"></script>
+  <script src="/script.js?v=20260714-report-period"></script>
 </body>
 </html>

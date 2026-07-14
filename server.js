@@ -709,11 +709,11 @@ function reportDate(value = new Date()) {
 }
 
 function buildWhatsappReportText(sheetTitle, period, summaryRows) {
-  const icons = {
-    "\u0421\u043f\u0440\u0430\u0432\u043d\u0456 \u0437\u0430\u0441\u043e\u0431\u0438": "[+]",
-    "\u0420\u0435\u043c\u043e\u043d\u0442": "[P]",
-    "\u041f\u043e\u0448\u043a\u043e\u0434\u0436\u0435\u043d\u0456 \u043d\u0430 \u043f\u043e\u0437\u0438\u0446\u0456\u0457": "[!]",
-    "\u0412\u0442\u0440\u0430\u0447\u0435\u043d\u043e": "[X]"
+  const labels = {
+    "\u0421\u043f\u0440\u0430\u0432\u043d\u0456 \u0437\u0430\u0441\u043e\u0431\u0438": "✅ НА СКЛАДІ / СПРАВНІ",
+    "\u0420\u0435\u043c\u043e\u043d\u0442": "🛠 РЕМОНТ",
+    "\u041f\u043e\u0448\u043a\u043e\u0434\u0436\u0435\u043d\u0456 \u043d\u0430 \u043f\u043e\u0437\u0438\u0446\u0456\u0457": "⚠️ ПОШКОДЖЕНІ НА ПОЗИЦІЇ",
+    "\u0412\u0442\u0440\u0430\u0447\u0435\u043d\u043e": "❌ ВТРАЧЕНО"
   };
 
   const sections = [];
@@ -736,31 +736,32 @@ function buildWhatsappReportText(sheetTitle, period, summaryRows) {
 
   if (!sections.length) throw new Error(`Зведена порожня для ${sheetTitle}`);
 
-  const dateLine = period ? `${reportDate()} (${period})` : reportDate();
+  const dateLine = period ? `${reportDate()}, ${period}` : reportDate();
   const lines = [
-    `=== Звіт ${sheetTitle} ===`,
-    dateLine,
-    "-----------------"
+    `📋 ЗВІТ: ${sheetTitle}`,
+    `🕒 Період: ${dateLine}`,
+    "",
+    "━━━━━━━━━━━━━━━━"
   ];
 
   sections.forEach((section) => {
-    lines.push("", `${icons[section.name] || "-"} ${section.name}:`);
+    lines.push("", labels[section.name] || section.name.toUpperCase());
     if (!section.items.length) {
-      lines.push("  - немає -");
+      lines.push("• немає");
       return;
     }
 
     section.items.forEach((item) => {
-      lines.push(`  - ${item.name} - ${item.qty} шт`);
+      lines.push(`• ${item.name} — ${item.qty} шт`);
     });
-    lines.push(`  Разом: ${section.total} шт`);
+    lines.push(`Разом: ${section.total} шт`);
   });
 
   lines.push(
     "",
-    "-----------------",
+    "━━━━━━━━━━━━━━━━",
     "",
-    "© 2026 Корпорація Інтелект. Всі права захищені."
+    "© 2025 Корпорація Інтелект. Всі права захищені."
   );
 
   return lines.join("\n");
@@ -1471,7 +1472,7 @@ async function updateEditableFields(request, rowNumber, fields, requestedSheetId
   };
 }
 
-async function sendReport(request, requestedSheetId) {
+async function sendReport(request, requestedSheetId, requestedPeriod = "") {
   const sheets = await sheetsClient(request);
   const meta = await applySheetAccess(request, await getSpreadsheetMeta(sheets, true));
   ensureSheetAccess(meta, requestedSheetId);
@@ -1490,13 +1491,14 @@ async function sendReport(request, requestedSheetId) {
 
   const [summaryValueRange, periodValueRange] = response.data.valueRanges || [];
   const summaryRows = summaryValueRange?.values || [];
-  const period = clean(periodValueRange?.values?.[0]?.[0]);
+  const period = clean(requestedPeriod) || clean(periodValueRange?.values?.[0]?.[0]);
   const text = buildWhatsappReportText(selectedSheet.title, period, summaryRows);
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
 
   return {
     sheetId: selectedSheet.id,
     sheetTitle: selectedSheet.title,
+    period,
     whatsappUrl,
     text
   };
@@ -1730,7 +1732,7 @@ async function requestHandler(request, response) {
   if (url.pathname === "/api/report" && request.method === "POST") {
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await sendReport(request, body.sheetId));
+      sendJson(response, 200, await sendReport(request, body.sheetId, body.period));
     } catch (error) {
       sendError(response, error, 400);
     }
