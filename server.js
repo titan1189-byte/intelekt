@@ -92,7 +92,8 @@ const STATUSES = [
   { key: "damaged", label: "Пошкоджені", sheetValue: "Пошкоджені на позиції" },
   { key: "lost", label: "Втрачені", sheetValue: "Втрачено" }
 ];
-const BATTLE_POSITION_LABEL = "На позиції БГ";
+const BATTLE_POSITION_LABEL = "На позиції";
+const BATTLE_POSITION_REPORT_LABEL = "На позиції БГ";
 const BATTLE_POSITION_PREFIXES = ["лх", "тз", "пурк"];
 
 function requiredEnv(name) {
@@ -716,7 +717,7 @@ function buildWhatsappReportText(sheetTitle, period, summaryRows, extraSections 
     "\u0420\u0435\u043c\u043e\u043d\u0442": "🛠 РЕМОНТ",
     "\u041f\u043e\u0448\u043a\u043e\u0434\u0436\u0435\u043d\u0456 \u043d\u0430 \u043f\u043e\u0437\u0438\u0446\u0456\u0457": "⚠️ ПОШКОДЖЕНІ НА ПОЗИЦІЇ",
     "\u0412\u0442\u0440\u0430\u0447\u0435\u043d\u043e": "❌ ВТРАЧЕНО",
-    [BATTLE_POSITION_LABEL]: "🎯 НА ПОЗИЦІЇ БГ"
+    [BATTLE_POSITION_LABEL]: `🎯 ${BATTLE_POSITION_REPORT_LABEL.toUpperCase()}`
   };
 
   const sections = [];
