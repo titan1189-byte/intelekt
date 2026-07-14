@@ -461,12 +461,72 @@ function запитатиПеріодЗвіту_(defaultPeriod) {
   return period || defaultPeriod || '';
 }
 
+const ПОЗИЦІЇ_БГ_НАЗВА_ = 'На позиції БГ';
+const ПОЗИЦІЇ_БГ_ПРЕФІКСИ_ = ['лх', 'тз', 'пурк'];
+
+function нормалізуватиТекст_(value) {
+  return value.toString().replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function цеРозділПозиційБГ_(sectionName) {
+  const value = нормалізуватиТекст_(sectionName || '');
+  return ПОЗИЦІЇ_БГ_ПРЕФІКСИ_.some((prefix) => value.indexOf(prefix) === 0);
+}
+
+function числоЗвіту_(value) {
+  const number = Number(value.toString().replace(/\s+/g, '').replace(',', '.'));
+  return isFinite(number) ? number : 0;
+}
+
+function текстКількості_(value) {
+  return value % 1 === 0 ? value.toString() : value.toString().replace('.', ',');
+}
+
+function сформуватиСекціюПозиційБГ_(unitSheet) {
+  const totals = {};
+  const lastRow = unitSheet.getLastRow();
+  if (lastRow < GENERAL.FIRST_DATA_ROW) {
+    return { name: ПОЗИЦІЇ_БГ_НАЗВА_, items: [], total: 0 };
+  }
+
+  const rows = unitSheet.getRange(1, 1, lastRow, GENERAL.TOTAL_COLS).getValues();
+  let currentSection = '';
+
+  for (const row of rows) {
+    const nonEmpty = row.map((cell) => cell.toString().trim()).filter(Boolean);
+    if (nonEmpty.length === 1) {
+      currentSection = nonEmpty[0];
+      continue;
+    }
+
+    if (!цеРозділПозиційБГ_(currentSection)) continue;
+
+    const name = row[1] ? row[1].toString().trim() : '';
+    if (!name || нормалізуватиТекст_(name).indexOf('назва майна') >= 0) continue;
+
+    const qty = числоЗвіту_(row[3] || 1);
+    totals[name] = (totals[name] || 0) + qty;
+  }
+
+  const items = Object.keys(totals)
+    .sort()
+    .map((name) => ({ name, qty: totals[name] }));
+  const total = items.reduce((sum, item) => sum + item.qty, 0);
+
+  return {
+    name: ПОЗИЦІЇ_БГ_НАЗВА_,
+    items,
+    total
+  };
+}
+
 function сформуватиТекстWhatsAppЗвіту_(unitName, period, sections) {
   const labels = {
     'Справні засоби': '[СКЛАД] НА СКЛАДІ / СПРАВНІ',
     'Ремонт': '[РЕМОНТ] РЕМОНТ',
     'Пошкоджені на позиції': '[ПОШКОДЖЕНО] ПОШКОДЖЕНІ НА ПОЗИЦІЇ',
     'Втрачено': '[ВТРАЧЕНО] ВТРАЧЕНО',
+    [ПОЗИЦІЇ_БГ_НАЗВА_]: '[ПОЗИЦІЇ БГ] НА ПОЗИЦІЇ БГ',
   };
 
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy');
@@ -487,9 +547,9 @@ function сформуватиТекстWhatsAppЗвіту_(unitName, period, sec
     }
 
     for (const item of section.items) {
-      lines.push('• ' + item.name + ' — ' + item.qty + ' шт');
+      lines.push('• ' + item.name + ' — ' + текстКількості_(item.qty) + ' шт');
     }
-    lines.push('Разом: ' + section.total + ' шт');
+    lines.push('Разом: ' + текстКількості_(section.total) + ' шт');
   }
 
   lines.push(
@@ -546,6 +606,8 @@ function надіслатиЗвіт_(unit) {
     SpreadsheetApp.getUi().alert('Зведена порожня для ' + unit.name);
     return;
   }
+
+  sections.push(сформуватиСекціюПозиційБГ_(unitSheet));
 
   const text = сформуватиТекстWhatsAppЗвіту_(unit.unit, period, sections);
 

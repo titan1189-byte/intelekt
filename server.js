@@ -92,6 +92,8 @@ const STATUSES = [
   { key: "damaged", label: "Пошкоджені", sheetValue: "Пошкоджені на позиції" },
   { key: "lost", label: "Втрачені", sheetValue: "Втрачено" }
 ];
+const BATTLE_POSITION_LABEL = "На позиції БГ";
+const BATTLE_POSITION_PREFIXES = ["лх", "тз", "пурк"];
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -708,12 +710,13 @@ function reportDate(value = new Date()) {
   return formatter.format(value).replace(/\//g, ".");
 }
 
-function buildWhatsappReportText(sheetTitle, period, summaryRows) {
+function buildWhatsappReportText(sheetTitle, period, summaryRows, extraSections = []) {
   const labels = {
     "\u0421\u043f\u0440\u0430\u0432\u043d\u0456 \u0437\u0430\u0441\u043e\u0431\u0438": "✅ НА СКЛАДІ / СПРАВНІ",
     "\u0420\u0435\u043c\u043e\u043d\u0442": "🛠 РЕМОНТ",
     "\u041f\u043e\u0448\u043a\u043e\u0434\u0436\u0435\u043d\u0456 \u043d\u0430 \u043f\u043e\u0437\u0438\u0446\u0456\u0457": "⚠️ ПОШКОДЖЕНІ НА ПОЗИЦІЇ",
-    "\u0412\u0442\u0440\u0430\u0447\u0435\u043d\u043e": "❌ ВТРАЧЕНО"
+    "\u0412\u0442\u0440\u0430\u0447\u0435\u043d\u043e": "❌ ВТРАЧЕНО",
+    [BATTLE_POSITION_LABEL]: "🎯 НА ПОЗИЦІЇ БГ"
   };
 
   const sections = [];
@@ -732,6 +735,17 @@ function buildWhatsappReportText(sheetTitle, period, summaryRows) {
     const qty = Number(String(row[2] || "").replace(",", ".")) || 0;
     currentSection.items.push({ name: itemName, qty });
     currentSection.total += qty;
+  });
+
+  extraSections.forEach((section) => {
+    sections.push({
+      name: section.label || BATTLE_POSITION_LABEL,
+      items: (section.items || []).map((item) => ({
+        name: item.name,
+        qty: item.quantityValue
+      })),
+      total: parseSummaryNumber(section.total)
+    });
   });
 
   if (!sections.length) throw new Error(`Зведена порожня для ${sheetTitle}`);
@@ -1054,6 +1068,51 @@ function parseSummaryNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function isBattlePositionGroup(value) {
+  const group = norm(value);
+  return BATTLE_POSITION_PREFIXES.some((prefix) => group.startsWith(prefix));
+}
+
+function aggregateBattlePositionItems(items) {
+  const totals = new Map();
+
+  items
+    .filter((item) => item.status === "stock" && isBattlePositionGroup(item.group))
+    .forEach((item) => {
+      const name = clean(item.name);
+      if (!name) return;
+
+      const current = totals.get(name) || 0;
+      totals.set(name, current + parseSummaryNumber(item.quantity || 1));
+    });
+
+  return Array.from(totals.entries())
+    .sort(([leftName], [rightName]) => leftName.localeCompare(rightName, "uk"))
+    .map(([name, quantity], index) => ({
+      number: String(index + 1),
+      name,
+      quantity: formatQuantity(quantity),
+      quantityValue: quantity
+    }));
+}
+
+function buildBattlePositionSummarySection(items) {
+  const aggregatedItems = aggregateBattlePositionItems(items);
+  const total = aggregatedItems.reduce((sum, item) => sum + item.quantityValue, 0);
+
+  return {
+    key: "battle-position",
+    label: BATTLE_POSITION_LABEL,
+    total: formatQuantity(total),
+    items: aggregatedItems
+  };
+}
+
+function formatQuantity(value) {
+  if (!Number.isFinite(value)) return "";
+  return Number.isInteger(value) ? String(value) : String(value).replace(".", ",");
+}
+
 function isSummaryHeader(values, rowIndex, startColumn) {
   const row = values[rowIndex] || [];
   const numberHeader = norm(row[startColumn]);
@@ -1141,7 +1200,7 @@ function findSummaryBlocks(values) {
   return blocks.sort((left, right) => left.startColumn - right.startColumn);
 }
 
-function parseSummarySheet(rows) {
+function parseSummarySheet(rows, extraSectionsByTitle = new Map()) {
   const values = formattedRows(rows);
   const blocks = findSummaryBlocks(values);
 
@@ -1181,10 +1240,40 @@ function parseSummarySheet(rows) {
 
       return {
         title: block.title,
-        sections
+        sections: [
+          ...sections,
+          ...(extraSectionsByTitle.get(block.title) || [])
+        ]
       };
     })
   };
+}
+
+async function readBattlePositionSectionsByTitle(sheets, spreadsheetId, meta) {
+  const inventorySheets = meta.sheets.filter((sheet) => {
+    return !isSummarySheetTitle(sheet.title) && REPORT_UNIT_SUMMARY_COLUMNS[sheet.title];
+  });
+
+  if (!inventorySheets.length) return new Map();
+
+  const response = await sheets.spreadsheets.get({
+    spreadsheetId,
+    ranges: inventorySheets.map((sheet) => `${quoteSheetName(sheet.title)}!${SHEET_RANGE}`),
+    includeGridData: true,
+    fields: "sheets(properties(title),data(rowData(values(formattedValue))))"
+  });
+
+  const sectionsByTitle = new Map();
+  (response.data.sheets || []).forEach((sheet) => {
+    const title = sheet.properties?.title;
+    if (!title) return;
+
+    const rows = sheet.data?.[0]?.rowData || [];
+    const items = parseInventory(rows);
+    sectionsByTitle.set(title, [buildBattlePositionSummarySection(items)]);
+  });
+
+  return sectionsByTitle;
 }
 
 async function listSheets(request) {
@@ -1242,7 +1331,10 @@ async function readInventory(request, requestedSheetId) {
   });
 
   const rows = response.data.sheets?.[0]?.data?.[0]?.rowData || [];
-  const summary = isSummarySheet ? parseSummarySheet(rows) : null;
+  const extraSummarySections = isSummarySheet
+    ? await readBattlePositionSectionsByTitle(sheets, spreadsheetId, meta)
+    : new Map();
+  const summary = isSummarySheet ? parseSummarySheet(rows, extraSummarySections) : null;
 
   return {
     spreadsheetTitle: meta.spreadsheetTitle,
@@ -1488,11 +1580,19 @@ async function sendReport(request, requestedSheetId, requestedPeriod = "") {
     ranges: [summaryRange, periodRange],
     valueRenderOption: "FORMATTED_VALUE"
   });
+  const inventoryResponse = await sheets.spreadsheets.get({
+    spreadsheetId,
+    ranges: [`${quoteSheetName(selectedSheet.title)}!${SHEET_RANGE}`],
+    includeGridData: true,
+    fields: "sheets(data(rowData(values(formattedValue))))"
+  });
 
   const [summaryValueRange, periodValueRange] = response.data.valueRanges || [];
   const summaryRows = summaryValueRange?.values || [];
   const period = clean(requestedPeriod) || clean(periodValueRange?.values?.[0]?.[0]);
-  const text = buildWhatsappReportText(selectedSheet.title, period, summaryRows);
+  const inventoryRows = inventoryResponse.data.sheets?.[0]?.data?.[0]?.rowData || [];
+  const battlePositionSection = buildBattlePositionSummarySection(parseInventory(inventoryRows));
+  const text = buildWhatsappReportText(selectedSheet.title, period, summaryRows, [battlePositionSection]);
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
 
   return {

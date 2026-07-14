@@ -1168,6 +1168,10 @@ textarea.editable-field:focus {
   background: #a8d59b;
 }
 
+.summary-category.tone-battle-position .summary-category-head {
+  background: #8bd8c8;
+}
+
 .summary-category.tone-damaged .summary-category-head {
   background: #9fb0c3;
 }
